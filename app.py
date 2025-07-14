@@ -3,7 +3,7 @@ import sqlite3
 import os
 import bcrypt
 import json
-from datetime import date
+from datetime import date, datetime
 
 DB_PATH = 'data/horse_checklist_app.db'
 
@@ -443,15 +443,55 @@ if st.session_state.logged_in:
         trainer_ids = [None] + [t["id"] for t in trainers]
         criteria = get_user_criteria(st.session_state.user_id)
 
-        if not checklists:
-            st.info("No checklists found.")
+        # --- Search/Filter Section ---
+        with st.expander("🔍 Search & Filter Checklists", expanded=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                filter_horse_idx = st.selectbox("Filter by Horse", range(len(horse_options)), format_func=lambda x: horse_options[x], key="filter_horse")
+                filter_jockey_idx = st.selectbox("Filter by Jockey", range(len(jockey_options)), format_func=lambda x: jockey_options[x], key="filter_jockey")
+                filter_trainer_idx = st.selectbox("Filter by Trainer", range(len(trainer_options)), format_func=lambda x: trainer_options[x], key="filter_trainer")
+            with col2:
+                filter_criteria = st.multiselect("Filter by Criteria (must match all selected)", [c["criteria_name"] for c in criteria], key="filter_criteria")
+                filter_date_from = st.date_input("From Date", value=None, key="filter_date_from")
+                filter_date_to = st.date_input("To Date", value=None, key="filter_date_to")
+
+        # --- Filtering Logic ---
+        filtered_checklists = []
+        for entry in checklists:
+            # Horse/Jockey/Trainer filter
+            if filter_horse_idx != 0 and entry["horse_id"] != horse_ids[filter_horse_idx]:
+                continue
+            if filter_jockey_idx != 0 and entry["jockey_id"] != jockey_ids[filter_jockey_idx]:
+                continue
+            if filter_trainer_idx != 0 and entry["trainer_id"] != trainer_ids[filter_trainer_idx]:
+                continue
+            # Date range filter
+            entry_date = None
+            try:
+                entry_date = datetime.strptime(entry['date_of_race'], "%Y-%m-%d").date()
+            except Exception:
+                pass
+            if filter_date_from and entry_date and entry_date < filter_date_from:
+                continue
+            if filter_date_to and entry_date and entry_date > filter_date_to:
+                continue
+            # Criteria filter (AND logic)
+            if filter_criteria:
+                if not entry["checklist"]:
+                    continue
+                if not all(entry["checklist"].get(c, False) for c in filter_criteria):
+                    continue
+            filtered_checklists.append(entry)
+
+        if not filtered_checklists:
+            st.info("No checklists found with the selected filters.")
         else:
             if "page_num" not in st.session_state:
                 st.session_state.page_num = 0
             if "page_size" not in st.session_state:
                 st.session_state.page_size = 20
             page_size = st.session_state.page_size
-            total_pages = (len(checklists) - 1) // page_size + 1
+            total_pages = (len(filtered_checklists) - 1) // page_size + 1
 
             # Reset page if page_size changes
             if "last_page_size" not in st.session_state or st.session_state.last_page_size != page_size:
@@ -461,9 +501,9 @@ if st.session_state.logged_in:
             page_num = st.session_state.page_num
             start_idx = page_num * page_size
             end_idx = start_idx + page_size
-            paged_checklists = checklists[start_idx:end_idx]
+            paged_checklists = filtered_checklists[start_idx:end_idx]
 
-            st.caption(f"Showing {start_idx+1}-{min(end_idx, len(checklists))} of {len(checklists)} checklists")
+            st.caption(f"Showing {start_idx+1}-{min(end_idx, len(filtered_checklists))} of {len(filtered_checklists)} checklists")
 
             for entry in paged_checklists:
                 with st.expander(f"Horse: {entry['horse_name']} | Jockey: {entry['jockey_name']} | Trainer: {entry['trainer_name']} | Date: {entry['date_of_race']}"):
@@ -539,7 +579,6 @@ if st.session_state.logged_in:
                     st.session_state.page_num = 0
                     st.rerun()
             with col2:
-                # Page number dropdown
                 page_options = [f"{i+1}" for i in range(total_pages)]
                 selected_page = st.selectbox("Page", page_options, index=page_num, key="page_dropdown", label_visibility="collapsed")
                 if int(selected_page) - 1 != page_num:
@@ -547,15 +586,8 @@ if st.session_state.logged_in:
                     st.rerun()
             with col3:
                 st.write(f"Page {page_num+1} / {total_pages}")
-                next_disabled = page_num >= total_pages - 1
-                # if st.button("Next ⟩", key="next_btn", disabled=next_disabled):
-                #     st.session_state.page_num += 1
-                #     st.rerun()
             with col4:
-                prev_disabled = page_num == 0
-                # if st.button("⟨ Prev", key="prev_btn", disabled=prev_disabled):
-                #     st.session_state.page_num -= 1
-                #     st.rerun()
+                pass  # reserved for future
 
 else:
     tab1, tab2 = st.tabs(["Login", "Register"])
