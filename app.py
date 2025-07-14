@@ -13,7 +13,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Create checklists table (now with jockey_id and trainer_id)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS checklists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,7 +30,6 @@ def init_db():
             FOREIGN KEY(trainer_id) REFERENCES trainers(id)
         )
     ''')
-    # Add jockey_id and trainer_id columns if missing (for upgrades)
     cursor.execute("PRAGMA table_info(checklists)")
     columns = [row[1] for row in cursor.fetchall()]
     if "jockey_id" not in columns:
@@ -39,7 +37,6 @@ def init_db():
     if "trainer_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN trainer_id INTEGER")
 
-    # Create users table with invitation_code
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +46,6 @@ def init_db():
         )
     ''')
 
-    # Create invitation_codes table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS invitation_codes (
             code TEXT PRIMARY KEY,
@@ -77,7 +73,6 @@ def init_db():
         )
     ''')
 
-    # Create trainers table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trainers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +93,6 @@ def init_db():
         )
     ''')
 
-    # Add missing columns to checklists if needed (for upgrades)
     cursor.execute("PRAGMA table_info(checklists)")
     columns = [row[1] for row in cursor.fetchall()]
     if "date_of_race" not in columns:
@@ -118,7 +112,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# User functions
+# --- User Functions ---
 def register_user(username, display_name, password, invitation_code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -126,7 +120,6 @@ def register_user(username, display_name, password, invitation_code):
     if cursor.fetchone():
         conn.close()
         return False, "Username already exists."
-    # Check invitation code
     cursor.execute("SELECT used FROM invitation_codes WHERE code = ?", (invitation_code,))
     code_row = cursor.fetchone()
     if not code_row:
@@ -153,7 +146,6 @@ def login_user(username, password):
         return True, user['display_name'], user['id']
     return False, None, None
 
-# Invitation code management (for admin use, not exposed in UI)
 def add_invitation_code(code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -166,7 +158,7 @@ def add_invitation_code(code):
     conn.close()
     return result
 
-# Horse functions
+# --- Horse Functions ---
 def add_horse(owner_id, horse_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -187,7 +179,7 @@ def get_user_horses(owner_id):
     conn.close()
     return horses
 
-# Jockey functions
+# --- Jockey Functions ---
 def add_jockey(owner_id, jockey_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -208,7 +200,7 @@ def get_user_jockeys(owner_id):
     conn.close()
     return jockeys
 
-# Trainer functions
+# --- Trainer Functions ---
 def add_trainer(owner_id, trainer_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -229,7 +221,7 @@ def get_user_trainers(owner_id):
     conn.close()
     return trainers
 
-# Criteria functions
+# --- Criteria Functions ---
 def add_criteria(owner_id, criteria_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -250,7 +242,7 @@ def get_user_criteria(owner_id):
     conn.close()
     return criteria
 
-# Checklist functions (now with jockey_id and trainer_id)
+# --- Checklist Functions ---
 def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -320,7 +312,6 @@ if "logged_in" not in st.session_state:
     st.session_state.display_name = ""
     st.session_state.user_id = None
 
-# --- Main App ---
 if st.session_state.logged_in:
     st.sidebar.write(f"Logged in as: {st.session_state.display_name}")
     page = st.sidebar.radio("Menu", [
@@ -451,10 +442,30 @@ if st.session_state.logged_in:
         trainer_options = ["(No trainer selected)"] + [t["trainer_name"] for t in trainers]
         trainer_ids = [None] + [t["id"] for t in trainers]
         criteria = get_user_criteria(st.session_state.user_id)
+
         if not checklists:
             st.info("No checklists found.")
         else:
-            for entry in checklists:
+            if "page_num" not in st.session_state:
+                st.session_state.page_num = 0
+            if "page_size" not in st.session_state:
+                st.session_state.page_size = 20
+            page_size = st.session_state.page_size
+            total_pages = (len(checklists) - 1) // page_size + 1
+
+            # Reset page if page_size changes
+            if "last_page_size" not in st.session_state or st.session_state.last_page_size != page_size:
+                st.session_state.page_num = 0
+                st.session_state.last_page_size = page_size
+
+            page_num = st.session_state.page_num
+            start_idx = page_num * page_size
+            end_idx = start_idx + page_size
+            paged_checklists = checklists[start_idx:end_idx]
+
+            st.caption(f"Showing {start_idx+1}-{min(end_idx, len(checklists))} of {len(checklists)} checklists")
+
+            for entry in paged_checklists:
                 with st.expander(f"Horse: {entry['horse_name']} | Jockey: {entry['jockey_name']} | Trainer: {entry['trainer_name']} | Date: {entry['date_of_race']}"):
                     horse_idx = 0
                     if entry["horse_id"] in horse_ids:
@@ -496,6 +507,55 @@ if st.session_state.logged_in:
                         else:
                             st.error(msg)
                     st.markdown("---")
+
+            # --- Pagination Controls: All on one line ---
+            st.markdown(
+                """
+                <style>
+                .pagination-line {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.8em;
+                    margin-top: 1em;
+                }
+                .pagination-btn {
+                    padding: 2px 10px;
+                    font-size: 0.95em;
+                    margin: 0 2px;
+                }
+                .page-dropdown {
+                    min-width: 60px;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+
+            col1, col2, col3, col4 = st.columns([1.3, 1.1, 1.1, 5])
+            with col1:
+                new_page_size = st.selectbox("Items per page", [20, 50, 100], index=[20, 50, 100].index(page_size), key="page_size_select", label_visibility="collapsed")
+                if new_page_size != page_size:
+                    st.session_state.page_size = new_page_size
+                    st.session_state.page_num = 0
+                    st.rerun()
+            with col2:
+                # Page number dropdown
+                page_options = [f"{i+1}" for i in range(total_pages)]
+                selected_page = st.selectbox("Page", page_options, index=page_num, key="page_dropdown", label_visibility="collapsed")
+                if int(selected_page) - 1 != page_num:
+                    st.session_state.page_num = int(selected_page) - 1
+                    st.rerun()
+            with col3:
+                st.write(f"Page {page_num+1} / {total_pages}")
+                next_disabled = page_num >= total_pages - 1
+                # if st.button("Next ⟩", key="next_btn", disabled=next_disabled):
+                #     st.session_state.page_num += 1
+                #     st.rerun()
+            with col4:
+                prev_disabled = page_num == 0
+                # if st.button("⟨ Prev", key="prev_btn", disabled=prev_disabled):
+                #     st.session_state.page_num -= 1
+                #     st.rerun()
 
 else:
     tab1, tab2 = st.tabs(["Login", "Register"])
