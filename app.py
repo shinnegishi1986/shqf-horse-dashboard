@@ -491,12 +491,18 @@ if st.session_state.logged_in:
             if "page_size" not in st.session_state:
                 st.session_state.page_size = 20
             page_size = st.session_state.page_size
-            total_pages = (len(filtered_checklists) - 1) // page_size + 1
+
+            # Calculate total pages safely
+            total_pages = (len(filtered_checklists) - 1) // page_size + 1 if len(filtered_checklists) > 0 else 1
 
             # Reset page if page_size changes
             if "last_page_size" not in st.session_state or st.session_state.last_page_size != page_size:
                 st.session_state.page_num = 0
                 st.session_state.last_page_size = page_size
+
+            # Clamp page_num to valid range after filtering
+            if st.session_state.page_num >= total_pages:
+                st.session_state.page_num = max(total_pages - 1, 0)
 
             page_num = st.session_state.page_num
             start_idx = page_num * page_size
