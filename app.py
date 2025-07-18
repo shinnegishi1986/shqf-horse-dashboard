@@ -104,6 +104,18 @@ def init_db():
     if "checklist" not in columns:
         cursor.execute('ALTER TABLE checklists ADD COLUMN checklist TEXT')
 
+    # Ensure unique constraint for (owner_id, horse_id, date_of_race)
+    cursor.execute("PRAGMA index_list(checklists)")
+    indexes = cursor.fetchall()
+    index_names = [i[1] for i in indexes]
+    if "unique_owner_horse_date" not in index_names:
+        try:
+            cursor.execute('''
+                CREATE UNIQUE INDEX unique_owner_horse_date ON checklists (owner_id, horse_id, date_of_race)
+            ''')
+        except sqlite3.OperationalError:
+            pass
+
     conn.commit()
     conn.close()
 
@@ -112,7 +124,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- User Functions ---
+# --- User Functions (unchanged) ---
 def register_user(username, display_name, password, invitation_code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -158,7 +170,7 @@ def add_invitation_code(code):
     conn.close()
     return result
 
-# --- Horse Functions ---
+# --- Horse Functions (unchanged) ---
 def add_horse(owner_id, horse_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -179,7 +191,7 @@ def get_user_horses(owner_id):
     conn.close()
     return horses
 
-# --- Jockey Functions ---
+# --- Jockey & Trainer Functions (unchanged) ---
 def add_jockey(owner_id, jockey_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -200,7 +212,6 @@ def get_user_jockeys(owner_id):
     conn.close()
     return jockeys
 
-# --- Trainer Functions ---
 def add_trainer(owner_id, trainer_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -221,7 +232,7 @@ def get_user_trainers(owner_id):
     conn.close()
     return trainers
 
-# --- Criteria Functions ---
+# --- Criteria Functions (unchanged) ---
 def add_criteria(owner_id, criteria_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -242,22 +253,46 @@ def get_user_criteria(owner_id):
     conn.close()
     return criteria
 
-# --- Checklist Functions ---
+# --- Checklist Functions (modified) ---
 def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Check duplicate for same owner, horse, and date_of_race
+    if horse_id is not None and date_of_race:
+        cursor.execute('''
+            SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=?
+        ''', (owner_id, horse_id, date_of_race))
+        if cursor.fetchone():
+            conn.close()
+            return False, "A checklist for this horse and race date is already registered."
+
     checklist_json = json.dumps(checklist_data) if checklist_data else None
-    cursor.execute(
-        "INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_json)
-    )
-    conn.commit()
+    try:
+        cursor.execute(
+            "INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_json)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False, "A checklist for this horse and race date is already registered."
     conn.close()
     return True, "Checklist saved!"
 
 def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
+
+    # Check for duplicate entry (excluding current id)
+    if horse_id is not None and date_of_race:
+        cursor.execute('''
+            SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=? AND id<>?
+        ''', (owner_id, horse_id, date_of_race, checklist_id))
+        if cursor.fetchone():
+            conn.close()
+            return False, "Another checklist for this horse and race date is already registered."
+
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     cursor.execute(
         "UPDATE checklists SET horse_id=?, jockey_id=?, trainer_id=?, date_of_race=?, memo=?, finished_place=?, checklist=? WHERE id=? AND owner_id=?",
@@ -301,7 +336,7 @@ def get_user_checklists(owner_id):
         })
     return checklists
 
-# --- Streamlit App ---
+# --- Streamlit App (unchanged except for using new add_checklist/update_checklist) ---
 init_db()
 st.set_page_config(page_title="Horse Checklist App", layout="centered")
 st.title("🐎 Horse Checklist App")
@@ -492,15 +527,12 @@ if st.session_state.logged_in:
                 st.session_state.page_size = 20
             page_size = st.session_state.page_size
 
-            # Calculate total pages safely
             total_pages = (len(filtered_checklists) - 1) // page_size + 1 if len(filtered_checklists) > 0 else 1
 
-            # Reset page if page_size changes
             if "last_page_size" not in st.session_state or st.session_state.last_page_size != page_size:
                 st.session_state.page_num = 0
                 st.session_state.last_page_size = page_size
 
-            # Clamp page_num to valid range after filtering
             if st.session_state.page_num >= total_pages:
                 st.session_state.page_num = max(total_pages - 1, 0)
 
@@ -554,7 +586,6 @@ if st.session_state.logged_in:
                             st.error(msg)
                     st.markdown("---")
 
-            # --- Pagination Controls: All on one line ---
             st.markdown(
                 """
                 <style>
