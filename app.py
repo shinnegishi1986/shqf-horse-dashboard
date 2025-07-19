@@ -20,6 +20,7 @@ def init_db():
             horse_id INTEGER,
             jockey_id INTEGER,
             trainer_id INTEGER,
+            venue_id INTEGER,
             date_of_race TEXT,
             memo TEXT,
             finished_place TEXT,
@@ -27,15 +28,19 @@ def init_db():
             FOREIGN KEY(owner_id) REFERENCES users(id),
             FOREIGN KEY(horse_id) REFERENCES horses(id),
             FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
-            FOREIGN KEY(trainer_id) REFERENCES trainers(id)
+            FOREIGN KEY(trainer_id) REFERENCES trainers(id),
+            FOREIGN KEY(venue_id) REFERENCES venues(id)
         )
     ''')
+    # --- Column migrations ---
     cursor.execute("PRAGMA table_info(checklists)")
     columns = [row[1] for row in cursor.fetchall()]
     if "jockey_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN jockey_id INTEGER")
     if "trainer_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN trainer_id INTEGER")
+    if "venue_id" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN venue_id INTEGER")
     if "date_of_race" not in columns:
         cursor.execute('ALTER TABLE checklists ADD COLUMN date_of_race TEXT')
     if "memo" not in columns:
@@ -113,6 +118,16 @@ def init_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS venues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            venue_name TEXT NOT NULL,
+            UNIQUE(owner_id, venue_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -121,7 +136,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- User Functions ---
+# --- User Functions (unchanged) ---
 def register_user(username, display_name, password, invitation_code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -167,7 +182,7 @@ def add_invitation_code(code):
     conn.close()
     return result
 
-# --- Horse Functions ---
+# --- Horse Functions (unchanged) ---
 def add_horse(owner_id, horse_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -188,7 +203,7 @@ def get_user_horses(owner_id):
     conn.close()
     return horses
 
-# --- Jockey Functions ---
+# --- Jockey & Trainer Functions (unchanged) ---
 def add_jockey(owner_id, jockey_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -209,7 +224,6 @@ def get_user_jockeys(owner_id):
     conn.close()
     return jockeys
 
-# --- Trainer Functions ---
 def add_trainer(owner_id, trainer_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -230,7 +244,48 @@ def get_user_trainers(owner_id):
     conn.close()
     return trainers
 
-# --- Criteria CRUD Functions ---
+# --- Venue Functions ---
+def add_venue(owner_id, venue_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM venues WHERE owner_id = ? AND venue_name = ?", (owner_id, venue_name))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Venue already registered."
+    cursor.execute("INSERT INTO venues (owner_id, venue_name) VALUES (?, ?)", (owner_id, venue_name))
+    conn.commit()
+    conn.close()
+    return True, "Venue registered!"
+
+def get_user_venues(owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, venue_name FROM venues WHERE owner_id = ?", (owner_id,))
+    venues = [{"id": row["id"], "venue_name": row["venue_name"]} for row in cursor.fetchall()]
+    conn.close()
+    return venues
+
+def update_venue(venue_id, owner_id, new_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM venues WHERE owner_id = ? AND venue_name = ? AND id != ?", (owner_id, new_name, venue_id))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Another venue with the same name exists."
+    cursor.execute("UPDATE venues SET venue_name = ? WHERE id = ? AND owner_id = ?", (new_name, venue_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Venue updated!"
+
+def delete_venue(venue_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM venues WHERE id = ? AND owner_id = ?", (venue_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Venue deleted!"
+
+# --- Criteria Functions (with update/delete) ---
 def add_criteria(owner_id, criteria_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -271,12 +326,10 @@ def delete_criteria(criteria_id, owner_id):
     conn.close()
     return True, "Criteria deleted!"
 
-# --- Checklist Functions ---
-def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
+# --- Checklist Functions (venue_id added) ---
+def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Check duplicate for same owner, horse, and date_of_race
     if horse_id is not None and date_of_race:
         cursor.execute('''
             SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=?
@@ -284,12 +337,11 @@ def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo,
         if cursor.fetchone():
             conn.close()
             return False, "A checklist for this horse and race date is already registered."
-
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     try:
         cursor.execute(
-            "INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_json)
+            "INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, venue_id, date_of_race, memo, finished_place, checklist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (owner_id, horse_id, jockey_id, trainer_id, venue_id, date_of_race, memo, finished_place, checklist_json)
         )
         conn.commit()
     except sqlite3.IntegrityError:
@@ -298,11 +350,9 @@ def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo,
     conn.close()
     return True, "Checklist saved!"
 
-def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
+def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, venue_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    # Check for duplicate entry (excluding current id)
     if horse_id is not None and date_of_race:
         cursor.execute('''
             SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=? AND id<>?
@@ -310,11 +360,10 @@ def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, da
         if cursor.fetchone():
             conn.close()
             return False, "Another checklist for this horse and race date is already registered."
-
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     cursor.execute(
-        "UPDATE checklists SET horse_id=?, jockey_id=?, trainer_id=?, date_of_race=?, memo=?, finished_place=?, checklist=? WHERE id=? AND owner_id=?",
-        (horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_json, checklist_id, owner_id)
+        "UPDATE checklists SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, date_of_race=?, memo=?, finished_place=?, checklist=? WHERE id=? AND owner_id=?",
+        (horse_id, jockey_id, trainer_id, venue_id, date_of_race, memo, finished_place, checklist_json, checklist_id, owner_id)
     )
     conn.commit()
     conn.close()
@@ -324,13 +373,17 @@ def get_user_checklists(owner_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT checklists.id, horses.id as horse_id, horses.horse_name, jockeys.id as jockey_id, jockeys.jockey_name,
-               trainers.id as trainer_id, trainers.trainer_name,
-               checklists.date_of_race, checklists.memo, checklists.finished_place, checklists.checklist
+        SELECT checklists.id,
+            horses.id as horse_id, horses.horse_name,
+            jockeys.id as jockey_id, jockeys.jockey_name,
+            trainers.id as trainer_id, trainers.trainer_name,
+            venues.id as venue_id, venues.venue_name,
+            checklists.date_of_race, checklists.memo, checklists.finished_place, checklists.checklist
         FROM checklists
         LEFT JOIN horses ON checklists.horse_id = horses.id
         LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
         LEFT JOIN trainers ON checklists.trainer_id = trainers.id
+        LEFT JOIN venues ON checklists.venue_id = venues.id
         WHERE checklists.owner_id = ?
         ORDER BY checklists.date_of_race DESC, checklists.id DESC
     """, (owner_id,))
@@ -347,6 +400,8 @@ def get_user_checklists(owner_id):
             "jockey_name": row['jockey_name'] if row['jockey_name'] else "(No jockey selected)",
             "trainer_id": row['trainer_id'],
             "trainer_name": row['trainer_name'] if row['trainer_name'] else "(No trainer selected)",
+            "venue_id": row['venue_id'],
+            "venue_name": row['venue_name'] if row['venue_name'] else "(No venue selected)",
             "date_of_race": row['date_of_race'],
             "memo": row['memo'] if row['memo'] else "",
             "finished_place": row['finished_place'] if row['finished_place'] else "",
@@ -371,6 +426,7 @@ if st.session_state.logged_in:
         "Register Horse (Template)",
         "Register Jockey (Template)",
         "Register Trainer (Template)",
+        "Register Venue (Template)",
         "Register Criteria (Template)",
         "Race Checklist",
         "Checklist Review"
@@ -410,7 +466,7 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
-                    
+
     elif page == "Register Trainer (Template)":
         st.header("Register a Trainer Template")
         trainer_name = st.text_input("Trainer Name", key="trainer_name_input")
@@ -424,6 +480,44 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+
+    elif page == "Register Venue (Template)":
+        st.header("Register a Venue (Racecourse) Template")
+        venue_name = st.text_input("Venue Name (e.g., Tokyo)", key="venue_name_input")
+        add_venue_clicked = st.button("Add Venue", key="add_venue_btn")
+        if add_venue_clicked:
+            if not venue_name.strip():
+                st.error("Please enter a venue name.")
+            else:
+                success, msg = add_venue(st.session_state.user_id, venue_name.strip())
+                if success:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+        st.write("### Edit/Delete Registered Venues")
+        venue_list = get_user_venues(st.session_state.user_id)
+        if not venue_list:
+            st.info("No venues registered yet.")
+        for venue in venue_list:
+            with st.expander(f"Venue: {venue['venue_name']}"):
+                new_name = st.text_input("Edit Venue Name", value=venue['venue_name'], key=f"edit_venue_{venue['id']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Update", key=f"update_venue_btn_{venue['id']}"):
+                        if not new_name.strip():
+                            st.error("Please enter a venue name.")
+                        else:
+                            success, msg = update_venue(venue['id'], st.session_state.user_id, new_name.strip())
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col2:
+                    if st.button("Delete", key=f"delete_venue_btn_{venue['id']}"):
+                        delete_venue(venue['id'], st.session_state.user_id)
+                        st.success("Venue deleted.")
+                        st.rerun()
 
     elif page == "Register Criteria (Template)":
         st.header("Register Checklist Criteria Template")
@@ -469,17 +563,22 @@ if st.session_state.logged_in:
         horses = get_user_horses(st.session_state.user_id)
         jockeys = get_user_jockeys(st.session_state.user_id)
         trainers = get_user_trainers(st.session_state.user_id)
+        venues = get_user_venues(st.session_state.user_id)
         criteria = get_user_criteria(st.session_state.user_id)
+
         horse_options = ["(No horse selected)"] + [h["horse_name"] for h in horses]
         horse_ids = [None] + [h["id"] for h in horses]
         jockey_options = ["(No jockey selected)"] + [j["jockey_name"] for j in jockeys]
         jockey_ids = [None] + [j["id"] for j in jockeys]
         trainer_options = ["(No trainer selected)"] + [t["trainer_name"] for t in trainers]
         trainer_ids = [None] + [t["id"] for t in trainers]
+        venue_options = ["(No venue selected)"] + [v["venue_name"] for v in venues]
+        venue_ids = [None] + [v["id"] for v in venues]
 
         selected_horse_idx = st.selectbox("Select Horse (optional)", range(len(horse_options)), format_func=lambda x: horse_options[x], key="race_horse_select")
         selected_jockey_idx = st.selectbox("Select Jockey (optional)", range(len(jockey_options)), format_func=lambda x: jockey_options[x], key="race_jockey_select")
         selected_trainer_idx = st.selectbox("Select Trainer (optional)", range(len(trainer_options)), format_func=lambda x: trainer_options[x], key="race_trainer_select")
+        selected_venue_idx = st.selectbox("Select Venue (optional)", range(len(venue_options)), format_func=lambda x: venue_options[x], key="race_venue_select")
         date_of_race = st.date_input("Date of Race", value=date.today(), key="race_date_input")
         memo = st.text_area("Memo (optional)", key="race_memo_input")
         finished_place = st.text_input("Finished Place (optional)", key="race_finished_place_input")
@@ -492,11 +591,13 @@ if st.session_state.logged_in:
             horse_id = horse_ids[selected_horse_idx]
             jockey_id = jockey_ids[selected_jockey_idx]
             trainer_id = trainer_ids[selected_trainer_idx]
+            venue_id = venue_ids[selected_venue_idx]
             success, msg = add_checklist(
                 st.session_state.user_id,
                 horse_id,
                 jockey_id,
                 trainer_id,
+                venue_id,
                 date_of_race.isoformat(),
                 memo.strip(),
                 finished_place.strip(),
@@ -513,12 +614,15 @@ if st.session_state.logged_in:
         horses = get_user_horses(st.session_state.user_id)
         jockeys = get_user_jockeys(st.session_state.user_id)
         trainers = get_user_trainers(st.session_state.user_id)
+        venues = get_user_venues(st.session_state.user_id)
         horse_options = ["(No horse selected)"] + [h["horse_name"] for h in horses]
         horse_ids = [None] + [h["id"] for h in horses]
         jockey_options = ["(No jockey selected)"] + [j["jockey_name"] for j in jockeys]
         jockey_ids = [None] + [j["id"] for j in jockeys]
         trainer_options = ["(No trainer selected)"] + [t["trainer_name"] for t in trainers]
         trainer_ids = [None] + [t["id"] for t in trainers]
+        venue_options = ["(No venue selected)"] + [v["venue_name"] for v in venues]
+        venue_ids = [None] + [v["id"] for v in venues]
         criteria = get_user_criteria(st.session_state.user_id)
 
         with st.expander("🔍 Search & Filter Checklists", expanded=True):
@@ -527,6 +631,7 @@ if st.session_state.logged_in:
                 filter_horse_idx = st.selectbox("Filter by Horse", range(len(horse_options)), format_func=lambda x: horse_options[x], key="filter_horse")
                 filter_jockey_idx = st.selectbox("Filter by Jockey", range(len(jockey_options)), format_func=lambda x: jockey_options[x], key="filter_jockey")
                 filter_trainer_idx = st.selectbox("Filter by Trainer", range(len(trainer_options)), format_func=lambda x: trainer_options[x], key="filter_trainer")
+                filter_venue_idx = st.selectbox("Filter by Venue", range(len(venue_options)), format_func=lambda x: venue_options[x], key="filter_venue")
             with col2:
                 filter_criteria = st.multiselect("Filter by Criteria (must match all selected)", [c["criteria_name"] for c in criteria], key="filter_criteria")
                 filter_date_from = st.date_input("From Date", value=None, key="filter_date_from")
@@ -539,6 +644,8 @@ if st.session_state.logged_in:
             if filter_jockey_idx != 0 and entry["jockey_id"] != jockey_ids[filter_jockey_idx]:
                 continue
             if filter_trainer_idx != 0 and entry["trainer_id"] != trainer_ids[filter_trainer_idx]:
+                continue
+            if filter_venue_idx != 0 and entry["venue_id"] != venue_ids[filter_venue_idx]:
                 continue
             entry_date = None
             try:
@@ -555,6 +662,21 @@ if st.session_state.logged_in:
                 if not all(entry["checklist"].get(c, False) for c in filter_criteria):
                     continue
             filtered_checklists.append(entry)
+
+        # --- Statistics ---
+        if filtered_checklists:
+            shown = [x for x in filtered_checklists if str(x['finished_place']).strip().isdigit()]
+            first = [x for x in shown if int(x['finished_place']) == 1]
+            within3 = [x for x in shown if int(x['finished_place']) in (1,2,3)]
+            st.markdown(
+                f"**Filtered Results:** {len(filtered_checklists)}   \n"
+                f"・Probability (Finished within 3rd):  "
+                +
+                (f"{(len(within3)/len(filtered_checklists)*100):.1f}%" if filtered_checklists else "-")
+                + "　/　"
+                f"・Probability (Won):  "
+                + (f"{(len(first)/len(filtered_checklists)*100):.1f}%" if filtered_checklists else "-")
+            )
 
         if not filtered_checklists:
             st.info("No checklists found with the selected filters.")
@@ -582,7 +704,8 @@ if st.session_state.logged_in:
             st.caption(f"Showing {start_idx+1}-{min(end_idx, len(filtered_checklists))} of {len(filtered_checklists)} checklists")
 
             for entry in paged_checklists:
-                with st.expander(f"Horse: {entry['horse_name']} | Jockey: {entry['jockey_name']} | Trainer: {entry['trainer_name']} | Date: {entry['date_of_race']}"):
+                expander_title = f"Horse: {entry['horse_name']} | Jockey: {entry['jockey_name']} | Trainer: {entry['trainer_name']} | Venue: {entry['venue_name']} | Date: {entry['date_of_race']} | Finished Place: {entry['finished_place']}"
+                with st.expander(expander_title):
                     horse_idx = 0
                     if entry["horse_id"] in horse_ids:
                         horse_idx = horse_ids.index(entry["horse_id"])
@@ -592,9 +715,13 @@ if st.session_state.logged_in:
                     trainer_idx = 0
                     if entry["trainer_id"] in trainer_ids:
                         trainer_idx = trainer_ids.index(entry["trainer_id"])
+                    venue_idx = 0
+                    if entry["venue_id"] in venue_ids:
+                        venue_idx = venue_ids.index(entry["venue_id"])
                     edit_horse_idx = st.selectbox("Horse", range(len(horse_options)), index=horse_idx, format_func=lambda x: horse_options[x], key=f"edit_horse_{entry['id']}")
                     edit_jockey_idx = st.selectbox("Jockey", range(len(jockey_options)), index=jockey_idx, format_func=lambda x: jockey_options[x], key=f"edit_jockey_{entry['id']}")
                     edit_trainer_idx = st.selectbox("Trainer", range(len(trainer_options)), index=trainer_idx, format_func=lambda x: trainer_options[x], key=f"edit_trainer_{entry['id']}")
+                    edit_venue_idx = st.selectbox("Venue", range(len(venue_options)), index=venue_idx, format_func=lambda x: venue_options[x], key=f"edit_venue_{entry['id']}")
                     edit_date = st.date_input("Date of Race", value=date.fromisoformat(entry['date_of_race']), key=f"edit_date_{entry['id']}")
                     edit_memo = st.text_area("Memo", value=entry['memo'], key=f"edit_memo_{entry['id']}")
                     edit_finished_place = st.text_input("Finished Place", value=entry['finished_place'], key=f"edit_finished_place_{entry['id']}")
@@ -606,12 +733,14 @@ if st.session_state.logged_in:
                         new_horse_id = horse_ids[edit_horse_idx]
                         new_jockey_id = jockey_ids[edit_jockey_idx]
                         new_trainer_id = trainer_ids[edit_trainer_idx]
+                        new_venue_id = venue_ids[edit_venue_idx]
                         success, msg = update_checklist(
                             entry['id'],
                             st.session_state.user_id,
                             new_horse_id,
                             new_jockey_id,
                             new_trainer_id,
+                            new_venue_id,
                             edit_date.isoformat(),
                             edit_memo.strip(),
                             edit_finished_place.strip(),
