@@ -36,6 +36,26 @@ def init_db():
         cursor.execute("ALTER TABLE checklists ADD COLUMN jockey_id INTEGER")
     if "trainer_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN trainer_id INTEGER")
+    if "date_of_race" not in columns:
+        cursor.execute('ALTER TABLE checklists ADD COLUMN date_of_race TEXT')
+    if "memo" not in columns:
+        cursor.execute('ALTER TABLE checklists ADD COLUMN memo TEXT')
+    if "finished_place" not in columns:
+        cursor.execute('ALTER TABLE checklists ADD COLUMN finished_place TEXT')
+    if "checklist" not in columns:
+        cursor.execute('ALTER TABLE checklists ADD COLUMN checklist TEXT')
+
+    # Unique index for owner/horse/date
+    cursor.execute("PRAGMA index_list(checklists)")
+    indexes = cursor.fetchall()
+    index_names = [i[1] for i in indexes]
+    if "unique_owner_horse_date" not in index_names:
+        try:
+            cursor.execute('''
+                CREATE UNIQUE INDEX unique_owner_horse_date ON checklists (owner_id, horse_id, date_of_race)
+            ''')
+        except sqlite3.OperationalError:
+            pass
 
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -93,29 +113,6 @@ def init_db():
         )
     ''')
 
-    cursor.execute("PRAGMA table_info(checklists)")
-    columns = [row[1] for row in cursor.fetchall()]
-    if "date_of_race" not in columns:
-        cursor.execute('ALTER TABLE checklists ADD COLUMN date_of_race TEXT')
-    if "memo" not in columns:
-        cursor.execute('ALTER TABLE checklists ADD COLUMN memo TEXT')
-    if "finished_place" not in columns:
-        cursor.execute('ALTER TABLE checklists ADD COLUMN finished_place TEXT')
-    if "checklist" not in columns:
-        cursor.execute('ALTER TABLE checklists ADD COLUMN checklist TEXT')
-
-    # Ensure unique constraint for (owner_id, horse_id, date_of_race)
-    cursor.execute("PRAGMA index_list(checklists)")
-    indexes = cursor.fetchall()
-    index_names = [i[1] for i in indexes]
-    if "unique_owner_horse_date" not in index_names:
-        try:
-            cursor.execute('''
-                CREATE UNIQUE INDEX unique_owner_horse_date ON checklists (owner_id, horse_id, date_of_race)
-            ''')
-        except sqlite3.OperationalError:
-            pass
-
     conn.commit()
     conn.close()
 
@@ -124,7 +121,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# --- User Functions (unchanged) ---
+# --- User Functions ---
 def register_user(username, display_name, password, invitation_code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -170,7 +167,7 @@ def add_invitation_code(code):
     conn.close()
     return result
 
-# --- Horse Functions (unchanged) ---
+# --- Horse Functions ---
 def add_horse(owner_id, horse_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -191,7 +188,7 @@ def get_user_horses(owner_id):
     conn.close()
     return horses
 
-# --- Jockey & Trainer Functions (unchanged) ---
+# --- Jockey Functions ---
 def add_jockey(owner_id, jockey_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -212,6 +209,7 @@ def get_user_jockeys(owner_id):
     conn.close()
     return jockeys
 
+# --- Trainer Functions ---
 def add_trainer(owner_id, trainer_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -232,7 +230,7 @@ def get_user_trainers(owner_id):
     conn.close()
     return trainers
 
-# --- Criteria Functions (unchanged) ---
+# --- Criteria CRUD Functions ---
 def add_criteria(owner_id, criteria_name):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -253,7 +251,27 @@ def get_user_criteria(owner_id):
     conn.close()
     return criteria
 
-# --- Checklist Functions (modified) ---
+def update_criteria(criteria_id, owner_id, new_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM criteria WHERE owner_id = ? AND criteria_name = ? AND id != ?", (owner_id, new_name, criteria_id))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Another criteria with the same name exists."
+    cursor.execute("UPDATE criteria SET criteria_name = ? WHERE id = ? AND owner_id = ?", (new_name, criteria_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Criteria updated!"
+
+def delete_criteria(criteria_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM criteria WHERE id = ? AND owner_id = ?", (criteria_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Criteria deleted!"
+
+# --- Checklist Functions ---
 def add_checklist(owner_id, horse_id, jockey_id, trainer_id, date_of_race, memo, finished_place, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -336,7 +354,7 @@ def get_user_checklists(owner_id):
         })
     return checklists
 
-# --- Streamlit App (unchanged except for using new add_checklist/update_checklist) ---
+# --- Streamlit App ---
 init_db()
 st.set_page_config(page_title="Horse Checklist App", layout="centered")
 st.title("🐎 Horse Checklist App")
@@ -392,7 +410,7 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
-
+                    
     elif page == "Register Trainer (Template)":
         st.header("Register a Trainer Template")
         trainer_name = st.text_input("Trainer Name", key="trainer_name_input")
@@ -420,6 +438,31 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+
+        st.write("### Edit/Delete Registered Criteria")
+        criteria_list = get_user_criteria(st.session_state.user_id)
+        if not criteria_list:
+            st.info("No criteria registered yet.")
+        for crit in criteria_list:
+            with st.expander(f"Criteria: {crit['criteria_name']}"):
+                new_name = st.text_input("Edit Criteria Name", value=crit['criteria_name'], key=f"edit_criteria_{crit['id']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Update", key=f"update_criteria_btn_{crit['id']}"):
+                        if not new_name.strip():
+                            st.error("Please enter a criteria name.")
+                        else:
+                            success, msg = update_criteria(crit['id'], st.session_state.user_id, new_name.strip())
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col2:
+                    if st.button("Delete", key=f"delete_criteria_btn_{crit['id']}"):
+                        delete_criteria(crit['id'], st.session_state.user_id)
+                        st.success("Criteria deleted.")
+                        st.rerun()
 
     elif page == "Race Checklist":
         st.header("Race Checklist")
@@ -478,7 +521,6 @@ if st.session_state.logged_in:
         trainer_ids = [None] + [t["id"] for t in trainers]
         criteria = get_user_criteria(st.session_state.user_id)
 
-        # --- Search/Filter Section ---
         with st.expander("🔍 Search & Filter Checklists", expanded=True):
             col1, col2 = st.columns(2)
             with col1:
@@ -490,17 +532,14 @@ if st.session_state.logged_in:
                 filter_date_from = st.date_input("From Date", value=None, key="filter_date_from")
                 filter_date_to = st.date_input("To Date", value=None, key="filter_date_to")
 
-        # --- Filtering Logic ---
         filtered_checklists = []
         for entry in checklists:
-            # Horse/Jockey/Trainer filter
             if filter_horse_idx != 0 and entry["horse_id"] != horse_ids[filter_horse_idx]:
                 continue
             if filter_jockey_idx != 0 and entry["jockey_id"] != jockey_ids[filter_jockey_idx]:
                 continue
             if filter_trainer_idx != 0 and entry["trainer_id"] != trainer_ids[filter_trainer_idx]:
                 continue
-            # Date range filter
             entry_date = None
             try:
                 entry_date = datetime.strptime(entry['date_of_race'], "%Y-%m-%d").date()
@@ -510,7 +549,6 @@ if st.session_state.logged_in:
                 continue
             if filter_date_to and entry_date and entry_date > filter_date_to:
                 continue
-            # Criteria filter (AND logic)
             if filter_criteria:
                 if not entry["checklist"]:
                     continue
