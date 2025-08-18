@@ -229,6 +229,26 @@ def add_horse(owner_id, horse_name):
     conn.close()
     return True, "Horse registered!"
 
+def update_horse(horse_id, owner_id, new_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM horses WHERE owner_id = ? AND horse_name = ? AND id != ?", (owner_id, new_name, horse_id))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Another horse with the same name exists."
+    cursor.execute("UPDATE horses SET horse_name = ? WHERE id = ? AND owner_id = ?", (new_name, horse_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Horse updated!"
+
+def delete_horse(horse_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM horses WHERE id = ? AND owner_id = ?", (horse_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Horse deleted!"
+
 
 def get_user_horses(owner_id):
     conn = get_db_connection()
@@ -252,6 +272,26 @@ def add_jockey(owner_id, jockey_name):
     conn.close()
     return True, "Jockey registered!"
 
+def update_jockey(jockey_id, owner_id, new_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM jockeys WHERE owner_id = ? AND jockey_name = ? AND id != ?", (owner_id, new_name, jockey_id))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Another jockey with the same name exists."
+    cursor.execute("UPDATE jockeys SET jockey_name = ? WHERE id = ? AND owner_id = ?", (new_name, jockey_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Jockey updated!"
+
+def delete_jockey(jockey_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM jockeys WHERE id = ? AND owner_id = ?", (jockey_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Jockey deleted!"
+
 
 def get_user_jockeys(owner_id):
     conn = get_db_connection()
@@ -273,6 +313,26 @@ def add_trainer(owner_id, trainer_name):
     conn.commit()
     conn.close()
     return True, "Trainer registered!"
+
+def update_trainer(trainer_id, owner_id, new_name):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM trainers WHERE owner_id = ? AND trainer_name = ? AND id != ?", (owner_id, new_name, trainer_id))
+    if cursor.fetchone():
+        conn.close()
+        return False, "Another trainer with the same name exists."
+    cursor.execute("UPDATE trainers SET trainer_name = ? WHERE id = ? AND owner_id = ?", (new_name, trainer_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Trainer updated!"
+
+def delete_trainer(trainer_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM trainers WHERE id = ? AND owner_id = ?", (trainer_id, owner_id))
+    conn.commit()
+    conn.close()
+    return True, "Trainer deleted!"
 
 
 def get_user_trainers(owner_id):
@@ -557,6 +617,33 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+        # ▼▼▼ Add these lines for LIST/EDIT/DELETE ▼▼▼
+        st.write("### Edit/Delete Registered Horses")
+        horse_list = get_user_horses(st.session_state.user_id)
+        if not horse_list:
+            st.info("No horses registered yet.")
+        for horse in horse_list:
+            with st.expander(f"Horse: {horse['horse_name']}"):
+                new_name = st.text_input("Edit Horse Name", value=horse['horse_name'], key=f"edit_horse_{horse['id']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Update", key=f"update_horse_btn_{horse['id']}"):
+                        if not new_name.strip():
+                            st.error("Please enter a horse name.")
+                        else:
+                            # Add an update_horse function like update_venue
+                            success, msg = update_horse(horse['id'], st.session_state.user_id, new_name.strip())
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col2:
+                    if st.button("Delete", key=f"delete_horse_btn_{horse['id']}"):
+                        # Add a delete_horse function like delete_venue
+                        delete_horse(horse['id'], st.session_state.user_id)
+                        st.success("Horse deleted.")
+                        st.rerun()
 
 
     elif page == "Register Jockey (Template)":
@@ -572,6 +659,31 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+        # ▼▼▼ Add these lines for LIST/EDIT/DELETE ▼▼▼
+        st.write("### Edit/Delete Registered Jockeys")
+        jockey_list = get_user_jockeys(st.session_state.user_id)
+        if not jockey_list:
+            st.info("No jockeys registered yet.")
+        for jockey in jockey_list:
+            with st.expander(f"Jockey: {jockey['jockey_name']}"):
+                new_name = st.text_input("Edit Jockey Name", value=jockey['jockey_name'], key=f"edit_jockey_{jockey['id']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Update", key=f"update_jockey_btn_{jockey['id']}"):
+                        if not new_name.strip():
+                            st.error("Please enter a jockey name.")
+                        else:
+                            success, msg = update_jockey(jockey['id'], st.session_state.user_id, new_name.strip())
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col2:
+                    if st.button("Delete", key=f"delete_jockey_btn_{jockey['id']}"):
+                        delete_jockey(jockey['id'], st.session_state.user_id)
+                        st.success("Jockey deleted.")
+                        st.rerun()
 
 
     elif page == "Register Trainer (Template)":
@@ -587,6 +699,31 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+        # ▼▼▼ Add these lines for LIST/EDIT/DELETE ▼▼▼
+        st.write("### Edit/Delete Registered Trainers")
+        trainer_list = get_user_trainers(st.session_state.user_id)
+        if not trainer_list:
+            st.info("No trainers registered yet.")
+        for trainer in trainer_list:
+            with st.expander(f"Trainer: {trainer['trainer_name']}"):
+                new_name = st.text_input("Edit Trainer Name", value=trainer['trainer_name'], key=f"edit_trainer_{trainer['id']}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("Update", key=f"update_trainer_btn_{trainer['id']}"):
+                        if not new_name.strip():
+                            st.error("Please enter a trainer name.")
+                        else:
+                            success, msg = update_trainer(trainer['id'], st.session_state.user_id, new_name.strip())
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col2:
+                    if st.button("Delete", key=f"delete_trainer_btn_{trainer['id']}"):
+                        delete_trainer(trainer['id'], st.session_state.user_id)
+                        st.success("Trainer deleted.")
+                        st.rerun()
 
 
     elif page == "Register Venue (Template)":
