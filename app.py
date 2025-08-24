@@ -4,6 +4,8 @@ import os
 import bcrypt
 import json
 from datetime import date, datetime
+import pandas as pd
+import io
 
 
 DB_PATH = 'data/horse_checklist_app.db'
@@ -903,6 +905,155 @@ if st.session_state.logged_in:
                 st.success(msg)
             else:
                 st.error(msg)
+        # =============================
+        # ▼--- NEW: Batch Upload & Template Download ---▼
+        # =============================
+        st.markdown("---")
+        st.subheader("Batch Import Race Checklists (CSV or Excel)")
+
+        # サンプルテンプレデータ（日付は両方のパターンを例示）
+        sample_data = pd.DataFrame({
+            "horse": ["Sample Horse A", "Sample Horse B"],
+            "jockey": ["", ""],
+            "trainer": ["", ""],
+            "venue": ["", ""],
+            "race_name": ["Demo Race", "G1 Spring Stakes"],
+            "distance": [1600, 1800],
+            "date_of_race": ["2025-04-01", "2025/06/07"],  # 日付カラムは "distance"の後
+            "memo": ["First sample entry", "Second entry"],
+        })
+        # 正しい並びで出力（distance→date_of_race→memo）
+        sample_data = sample_data[["horse", "jockey", "trainer", "venue", "race_name", "distance", "date_of_race", "memo"]]
+
+        template_bytes = io.BytesIO()
+        sample_data.to_csv(template_bytes, index=False)
+        template_bytes.seek(0)
+
+        st.download_button(
+            label="📥 Download CSV Template",
+            data=template_bytes,
+            file_name="race_checklist_template.csv",
+            mime="text/csv"
+        )
+
+        uploaded_file = st.file_uploader(
+            "Upload CSV or XLSX file with columns: horse, jockey, trainer, venue, race_name, distance, date_of_race, memo (date: YYYY-MM-DD or YYYY/MM/DD)",
+            type=["csv", "xlsx"],
+            key="batch_checklist_file"
+        )
+
+        def normalize_date(date_val):
+            # 日付カラムはdate型（YYYY-MM-DD）で保存。hh:mm:ss等の時間付きデータは省略する。
+            if pd.isna(date_val) or not date_val:
+                return None
+            # pandasのTimestamp/datetime型ならdate部分のみ抽出
+            if isinstance(date_val, (datetime, pd.Timestamp)):
+                return date_val.date().strftime("%Y-%m-%d")
+            date_str = str(date_val).strip()
+            # "2025-08-24 00:00:00" のようなフォーマットのときは日付部分のみ分離
+            if " " in date_str:
+                date_str = date_str.split(" ")[0]
+            for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                try:
+                    dt = datetime.strptime(date_str, fmt)
+                    return dt.strftime("%Y-%m-%d")
+                except Exception:
+                    continue
+            # Excelシリアル日付対応
+            try:
+                if date_str.isdigit():
+                    dt = pd.to_datetime(float(date_str), unit='d', origin='1899-12-30')
+                    return dt.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+            return date_str if date_str else None
+
+
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.lower().endswith(".csv"):
+                    df = pd.read_csv(uploaded_file)
+                else:
+                    df = pd.read_excel(uploaded_file)
+                df.columns = [str(c).lower().replace(" ", "_") for c in df.columns]
+                required_cols = ["horse", "jockey", "trainer", "venue", "race_name", "distance", "date_of_race", "memo"]
+                if not all(x in df.columns for x in required_cols):
+                    st.error(f"Missing required columns. Required: {', '.join(required_cols)}")
+                else:
+                    success_count = 0
+                    failed = []
+                    for idx, row in df.iterrows():
+                        def get_or_add_horse(name):
+                            if not name or pd.isna(name) or not str(name).strip():
+                                return None
+                            name = str(name).strip()
+                            horses = get_user_horses(st.session_state.user_id)
+                            horse = next((i for i in horses if i["horse_name"] == name), None)
+                            if horse:
+                                return horse["id"]
+                            add_horse(st.session_state.user_id, name)
+                            horses = get_user_horses(st.session_state.user_id)
+                            horse = next((i for i in horses if i["horse_name"] == name), None)
+                            return horse["id"] if horse else None
+
+                        def get_or_add_race_name(name):
+                            if not name or pd.isna(name) or not str(name).strip():
+                                return None
+                            name = str(name).strip()
+                            races = get_user_race_names(st.session_state.user_id)
+                            race = next((i for i in races if i["race_name"] == name), None)
+                            if race:
+                                return race["id"]
+                            add_race_name(st.session_state.user_id, name)
+                            races = get_user_race_names(st.session_state.user_id)
+                            race = next((i for i in races if i["race_name"] == name), None)
+                            return race["id"] if race else None
+
+                        def get_id_or_none(get_list_fn, keyname, name):
+                            if not name or pd.isna(name) or not str(name).strip():
+                                return None
+                            name = str(name).strip()
+                            items = get_list_fn(st.session_state.user_id)
+                            item = next((i for i in items if i[keyname] == name), None)
+                            return item["id"] if item else None
+
+                        horse_id = get_or_add_horse(row["horse"])
+                        jockey_id = get_id_or_none(get_user_jockeys, "jockey_name", row["jockey"])
+                        trainer_id = get_id_or_none(get_user_trainers, "trainer_name", row["trainer"])
+                        venue_id = get_id_or_none(get_user_venues, "venue_name", row["venue"])
+                        race_name_id = get_or_add_race_name(row["race_name"])
+                        try:
+                            distance = int(row["distance"]) if pd.notna(row["distance"]) else None
+                        except:
+                            distance = None
+                        date_of_race = normalize_date(row.get("date_of_race", None))
+                        memo = str(row["memo"]) if pd.notna(row["memo"]) else ""
+
+                        ok, msg = add_checklist(
+                            st.session_state.user_id,
+                            horse_id,
+                            jockey_id,
+                            trainer_id,
+                            venue_id,
+                            race_name_id,
+                            distance,
+                            date_of_race,
+                            memo,
+                            None,
+                            None
+                        )
+                        if ok:
+                            success_count += 1
+                        else:
+                            failed.append((idx + 2, msg))  # header行考慮で+2
+                    st.success(f"Imported {success_count} checklists.")
+                    if failed:
+                        st.error("Failed rows: " + "; ".join([f"Row {r}: {m}" for r, m in failed]))
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+        # =============================
+        # ▲--- End Batch Upload & Template Download ---▲
+        # =============================
 
 
     elif page == "Checklist Review":
@@ -1054,7 +1205,7 @@ if st.session_state.logged_in:
                     # --------- Add the race name selectbox ---------
                     edit_race_idx = st.selectbox("Race Name", range(len(race_options)), index=race_idx, format_func=lambda x: race_options[x], key=f"edit_race_{entry['id']}")
                     edit_distance = st.number_input("Distance (meters)", min_value=0, max_value=5000, value=entry.get('distance') or 0, step=100, key=f"edit_distance_{entry['id']}")
-                    edit_date = st.date_input("Date of Race", value=date.fromisoformat(entry['date_of_race']), key=f"edit_date_{entry['id']}")
+                    edit_date = st.date_input("Date of Race", value=datetime.fromisoformat(entry['date_of_race']).date(),key=f"edit_date_{entry['id']}")
                     edit_memo = st.text_area("Memo", value=entry['memo'], key=f"edit_memo_{entry['id']}")
                     edit_finished_place = st.text_input("Finished Place", value=entry['finished_place'], key=f"edit_finished_place_{entry['id']}")
                     edit_checklist_data = {}
