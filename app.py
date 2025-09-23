@@ -32,6 +32,8 @@ def init_db():
             memo TEXT,
             finished_place TEXT,
             checklist TEXT,
+            program_number INTEGER,
+            number_of_horses INTEGER,
             FOREIGN KEY(owner_id) REFERENCES users(id),
             FOREIGN KEY(horse_id) REFERENCES horses(id),
             FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
@@ -61,6 +63,10 @@ def init_db():
         cursor.execute("ALTER TABLE checklists ADD COLUMN race_name_id INTEGER")
     if "checklist" not in columns:
         cursor.execute('ALTER TABLE checklists ADD COLUMN checklist TEXT')
+    if "program_number" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN program_number INTEGER")
+    if "number_of_horses" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN number_of_horses INTEGER")
 
 
     # Unique index for owner/horse/date
@@ -478,23 +484,21 @@ def delete_criteria(criteria_id, owner_id):
     return True, "Criteria deleted!"
 
 
-# --- Checklist Functions (venue_id and distance added) ---
-def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_data):
+# --- Checklist Functions (venue_id# ---- 2. add_checklist, update_checklist, getuserchecklists ----
+def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_data, program_number=None, number_of_horses=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     if horse_id is not None and date_of_race:
-        cursor.execute('''
-            SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=?
-        ''', (owner_id, horse_id, date_of_race))
+        cursor.execute("SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=?", (owner_id, horse_id, date_of_race))
         if cursor.fetchone():
             conn.close()
             return False, "A checklist for this horse and race date is already registered."
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     try:
-        cursor.execute(
-            "INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_json)
-        )
+        cursor.execute("""
+            INSERT INTO checklists (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist, program_number, number_of_horses)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_json, program_number, number_of_horses))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -503,21 +507,19 @@ def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name
     return True, "Checklist saved!"
 
 
-def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_data):
+def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, program_number, number_of_horses, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
     if horse_id is not None and date_of_race:
-        cursor.execute('''
-            SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=? AND id<>?
-        ''', (owner_id, horse_id, date_of_race, checklist_id))
+        cursor.execute("SELECT id FROM checklists WHERE owner_id=? AND horse_id=? AND date_of_race=? AND id!=?", (owner_id, horse_id, date_of_race, checklist_id))
         if cursor.fetchone():
             conn.close()
             return False, "Another checklist for this horse and race date is already registered."
     checklist_json = json.dumps(checklist_data) if checklist_data else None
-    cursor.execute(
-        "UPDATE checklists SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, race_name_id=?, distance=?, date_of_race=?, memo=?, finished_place=?, checklist=? WHERE id=? AND owner_id=?",
-        (horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_json, checklist_id, owner_id)
-    )
+    cursor.execute("""
+        UPDATE checklists SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, race_name_id=?, distance=?, date_of_race=?, memo=?, finished_place=?, checklist=?, program_number=?, number_of_horses=?
+        WHERE id=? AND owner_id=?
+    """, (horse_id, jockey_id, trainer_id, venue_id, race_name_id, distance, date_of_race, memo, finished_place, checklist_json, program_number, number_of_horses, checklist_id, owner_id))
     conn.commit()
     conn.close()
     return True, "Checklist updated!"
@@ -526,15 +528,13 @@ def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, ve
 def get_user_checklists(owner_id):
     conn = get_db_connection()
     cursor = conn.cursor()
+    # 新カラムをSELECTへ追加
     cursor.execute("""
-        SELECT checklists.id,
-            horses.id as horse_id, horses.horse_name,
-            jockeys.id as jockey_id, jockeys.jockey_name,
-            trainers.id as trainer_id, trainers.trainer_name,
-            venues.id as venue_id, venues.venue_name,
-            race_names.id as race_name_id, race_names.race_name,
-            checklists.distance,
-            checklists.date_of_race, checklists.memo, checklists.finished_place, checklists.checklist
+        SELECT checklists.id, horses.id as horse_id, horses.horse_name, jockeys.id as jockey_id, jockeys.jockey_name,
+               trainers.id as trainer_id, trainers.trainer_name, venues.id as venue_id, venues.venue_name,
+               race_names.id as race_name_id, race_names.race_name, checklists.distance, checklists.date_of_race,
+               checklists.memo, checklists.finished_place, checklists.checklist,
+               checklists.program_number, checklists.number_of_horses
         FROM checklists
         LEFT JOIN horses ON checklists.horse_id = horses.id
         LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
@@ -548,26 +548,29 @@ def get_user_checklists(owner_id):
     conn.close()
     checklists = []
     for row in results:
-        checklist_data = json.loads(row['checklist']) if row['checklist'] else {}
+        checklist_data = json.loads(row["checklist"]) if row["checklist"] else {}
         checklists.append({
-            "id": row['id'],
-            "horse_id": row['horse_id'],
-            "horse_name": row['horse_name'] if row['horse_name'] else "(No horse selected)",
-            "jockey_id": row['jockey_id'],
-            "jockey_name": row['jockey_name'] if row['jockey_name'] else "(No jockey selected)",
-            "trainer_id": row['trainer_id'],
-            "trainer_name": row['trainer_name'] if row['trainer_name'] else "(No trainer selected)",
-            "venue_id": row['venue_id'],
-            "venue_name": row['venue_name'] if row['venue_name'] else "(No venue selected)",
-            "race_name_id": row['race_name_id'],
-            "race_name": row['race_name'] if row['race_name'] else "(No race name selected)",
-            "distance": row['distance'],
-            "date_of_race": row['date_of_race'],
-            "memo": row['memo'] if row['memo'] else "",
-            "finished_place": row['finished_place'] if row['finished_place'] else "",
-            "checklist": checklist_data
+            "id": row["id"],
+            "horse_id": row["horse_id"],
+            "horse_name": row["horse_name"] if row["horse_name"] else "No horse selected",
+            "jockey_id": row["jockey_id"],
+            "jockey_name": row["jockey_name"] if row["jockey_name"] else "No jockey selected",
+            "trainer_id": row["trainer_id"],
+            "trainer_name": row["trainer_name"] if row["trainer_name"] else "No trainer selected",
+            "venue_id": row["venue_id"],
+            "venue_name": row["venue_name"] if row["venue_name"] else "No venue selected",
+            "race_name_id": row["race_name_id"],
+            "race_name": row["race_name"] if row["race_name"] else "No race name selected",
+            "distance": row["distance"],
+            "date_of_race": row["date_of_race"],
+            "memo": row["memo"] if row["memo"] else "",
+            "finished_place": row["finished_place"] if row["finished_place"] else "",
+            "checklist": checklist_data,
+            "program_number": row["program_number"],
+            "number_of_horses": row["number_of_horses"]
         })
     return checklists
+
 
 
 # --- Streamlit App ---
@@ -877,6 +880,8 @@ if st.session_state.logged_in:
         date_of_race = st.date_input("Date of Race", value=date.today(), key="race_date_input")
         memo = st.text_area("Memo (optional)", key="race_memo_input")
         finished_place = st.text_input("Finished Place (optional)", key="race_finished_place_input")
+        program_number = st.number_input("Program Number (optional)(レース番号)", min_value=0, max_value=12, key="race_program_number_input")
+        number_of_horses = st.number_input("Number of Horses (optional)(出走頭数)", min_value=0, max_value=18, key="race_number_of_horses_input")
         checklist_data = {}
         st.write("Check the criteria that apply for this race (optional):")
         for c in criteria:
@@ -899,7 +904,9 @@ if st.session_state.logged_in:
                 date_of_race.isoformat(),
                 memo.strip(),
                 finished_place.strip(),
-                checklist_data if any(checklist_data.values()) else None
+                checklist_data if any(checklist_data.values()) else None,
+                program_number, 
+                number_of_horses
             )
             if success:
                 st.success(msg)
@@ -1087,12 +1094,19 @@ if st.session_state.logged_in:
                 filter_race_idx = st.selectbox("Filter by Race Name", range(len(race_options)), format_func=lambda x: race_options[x], key="filter_race")
                 # --- Add a memo keyword filter box ---
                 filter_memo_keyword = st.text_input("Memo contains keyword (optional)", value="", key="filter_memo_keyword")
+                filter_program_number = st.number_input(
+                    "Filter by Program Number", min_value=0, max_value=12, value=0, help="0=すべて"
+                )
+                filter_number_of_horses = st.number_input(
+                    "Filter by Number of Horses", min_value=0, max_value=18, value=0, help="0=すべて"
+                )
             with col2:
                 filter_criteria = st.multiselect("Filter by Criteria (must match all selected)", [c["criteria_name"] for c in criteria], key="filter_criteria")
                 filter_distance_from = st.number_input("From Distance (meters)", min_value=0, max_value=5000, value=0, step=100, key="filter_distance_from")
                 filter_distance_to = st.number_input("To Distance (meters)", min_value=0, max_value=5000, value=5000, step=100, key="filter_distance_to")
                 filter_date_from = st.date_input("From Date", value=None, key="filter_date_from")
                 filter_date_to = st.date_input("To Date", value=None, key="filter_date_to")
+                filter_places = st.multiselect("Filter by Finished Place (着順)", [str(i) for i in range(1, 18)], help="例: 上位3着のみ")
 
 
         filtered_checklists = []
@@ -1129,6 +1143,12 @@ if st.session_state.logged_in:
             if filter_memo_keyword and filter_memo_keyword.strip():
                 if filter_memo_keyword.strip().lower() not in (entry['memo'] or "").lower():
                     continue
+            if filter_program_number and entry.get('program_number', 0) != filter_program_number:
+                continue
+            if filter_number_of_horses and entry.get('number_of_horses', 0) != filter_number_of_horses:
+                continue
+            if filter_places and str(entry.get('finished_place', '')).strip() not in filter_places:
+                continue
             filtered_checklists.append(entry)
 
 
@@ -1208,6 +1228,14 @@ if st.session_state.logged_in:
                     edit_date = st.date_input("Date of Race", value=datetime.fromisoformat(entry['date_of_race']).date(),key=f"edit_date_{entry['id']}")
                     edit_memo = st.text_area("Memo", value=entry['memo'], key=f"edit_memo_{entry['id']}")
                     edit_finished_place = st.text_input("Finished Place", value=entry['finished_place'], key=f"edit_finished_place_{entry['id']}")
+                    
+                    # --------- ここから「Program Number」「Number of Horses」表示を追加 ---------
+                    # Editing Program Number and Number of Horses
+                    edit_program_number = st.number_input(
+                        "Program Number", min_value=1, max_value=12, value=entry.get("program_number") or 1, key=f"edit_program_number_{entry['id']}")
+                    edit_number_of_horses = st.number_input(
+                        "Number of Horses", min_value=1, max_value=18, value=entry.get("number_of_horses") or 1, key=f"edit_number_of_horses_{entry['id']}")                   
+                    
                     edit_checklist_data = {}
                     for c in criteria:
                         prev = entry['checklist'].get(c["criteria_name"], False)
@@ -1230,6 +1258,8 @@ if st.session_state.logged_in:
                             edit_date.isoformat(),
                             edit_memo.strip(),
                             edit_finished_place.strip(),
+                            edit_program_number,
+                            edit_number_of_horses,
                             edit_checklist_data if any(edit_checklist_data.values()) else None
                         )
                         if success:
