@@ -14,32 +14,32 @@ def init_db():
     os.makedirs('data', exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS checklists (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    horse_id INTEGER,
-    jockey_id INTEGER,
-    trainer_id INTEGER,
-    venue_id INTEGER,
-    race_name_id INTEGER,
-    distance INTEGER,
-    date_of_race TEXT,
-    memo TEXT,
-    finished_place TEXT,
-    checklist TEXT,
-    program_number INTEGER,
-    number_of_horses INTEGER,
-    odds REAL,
-    prize REAL,
-    FOREIGN KEY(owner_id) REFERENCES users(id),
-    FOREIGN KEY(horse_id) REFERENCES horses(id),
-    FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
-    FOREIGN KEY(trainer_id) REFERENCES trainers(id),
-    FOREIGN KEY(venue_id) REFERENCES venues(id),
-    FOREIGN KEY(race_name_id) REFERENCES race_names(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS checklists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            horse_id INTEGER,
+            jockey_id INTEGER,
+            trainer_id INTEGER,
+            venue_id INTEGER,
+            race_name_id INTEGER,
+            distance INTEGER,
+            date_of_race TEXT,
+            memo TEXT,
+            finished_place TEXT,
+            checklist TEXT,
+            program_number INTEGER,
+            number_of_horses INTEGER,
+            odds REAL,
+            FOREIGN KEY(owner_id) REFERENCES users(id),
+            FOREIGN KEY(horse_id) REFERENCES horses(id),
+            FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
+            FOREIGN KEY(trainer_id) REFERENCES trainers(id),
+            FOREIGN KEY(venue_id) REFERENCES venues(id),
+            FOREIGN KEY(race_name_id) REFERENCES race_names(id)
+        )
+    ''')
     # --- Column migrations ---
     cursor.execute("PRAGMA table_info(checklists)")
     columns = [row[1] for row in cursor.fetchall()]
@@ -67,8 +67,7 @@ CREATE TABLE IF NOT EXISTS checklists (
         cursor.execute("ALTER TABLE checklists ADD COLUMN number_of_horses INTEGER")
     if "odds" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN odds REAL")
-    if "prize" not in columns:
-        cursor.execute("ALTER TABLE checklists ADD COLUMN prize REAL")
+
     # Unique index for owner/horse/date
     cursor.execute("PRAGMA index_list(checklists)")
     indexes = cursor.fetchall()
@@ -76,78 +75,87 @@ CREATE TABLE IF NOT EXISTS checklists (
     if "unique_owner_horse_date" not in index_names:
         try:
             cursor.execute('''
-CREATE UNIQUE INDEX unique_owner_horse_date ON checklists (owner_id, horse_id, date_of_race)
-''')
+                CREATE UNIQUE INDEX unique_owner_horse_date ON checklists (owner_id, horse_id, date_of_race)
+            ''')
         except sqlite3.OperationalError:
             pass
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    display_name TEXT NOT NULL,
-    password TEXT NOT NULL
-);
-''')
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
+            password TEXT NOT NULL
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS invitation_codes (
-    code TEXT PRIMARY KEY,
-    used INTEGER DEFAULT 0
-);
-''')
+        CREATE TABLE IF NOT EXISTS invitation_codes (
+            code TEXT PRIMARY KEY,
+            used INTEGER DEFAULT 0
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS horses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    horse_name TEXT NOT NULL,
-    UNIQUE(owner_id, horse_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS horses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            horse_name TEXT NOT NULL,
+            UNIQUE(owner_id, horse_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS jockeys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    jockey_name TEXT NOT NULL,
-    UNIQUE(owner_id, jockey_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS jockeys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            jockey_name TEXT NOT NULL,
+            UNIQUE(owner_id, jockey_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS trainers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    trainer_name TEXT NOT NULL,
-    UNIQUE(owner_id, trainer_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS trainers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            trainer_name TEXT NOT NULL,
+            UNIQUE(owner_id, trainer_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS criteria (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    criteria_name TEXT NOT NULL,
-    UNIQUE(owner_id, criteria_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS criteria (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            criteria_name TEXT NOT NULL,
+            UNIQUE(owner_id, criteria_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS venues (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    venue_name TEXT NOT NULL,
-    UNIQUE(owner_id, venue_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+        CREATE TABLE IF NOT EXISTS venues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            venue_name TEXT NOT NULL,
+            UNIQUE(owner_id, venue_name),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    ''')
+
     cursor.execute('''
-CREATE TABLE IF NOT EXISTS race_names (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER NOT NULL,
-    race_name TEXT NOT NULL,
-    UNIQUE(owner_id, race_name),
-    FOREIGN KEY(owner_id) REFERENCES users(id)
-);
-''')
+    CREATE TABLE IF NOT EXISTS race_names (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id INTEGER NOT NULL,
+        race_name TEXT NOT NULL,
+        UNIQUE(owner_id, race_name),
+        FOREIGN KEY(owner_id) REFERENCES users(id)
+    )
+    ''')
+
     conn.commit()
     conn.close()
 
@@ -173,7 +181,8 @@ def register_user(username, display_name, password, invitation_code):
         conn.close()
         return False, "Invitation code has already been used."
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    cursor.execute("INSERT INTO users (username, display_name, password) VALUES (?, ?, ?)", (username, display_name, hashed))
+    cursor.execute("INSERT INTO users (username, display_name, password) VALUES (?, ?, ?)",
+                   (username, display_name, hashed))
     cursor.execute("UPDATE invitation_codes SET used = 1 WHERE code = ?", (invitation_code,))
     conn.commit()
     conn.close()
@@ -449,7 +458,7 @@ def delete_criteria(criteria_id, owner_id):
 # --- Checklist Functions ---
 def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
                   distance, date_of_race, memo, finished_place, checklist_data,
-                  program_number=None, number_of_horses=None, odds=None, prize=None):
+                  program_number=None, number_of_horses=None, odds=None):
     conn = get_db_connection()
     cursor = conn.cursor()
     if horse_id is not None and date_of_race:
@@ -461,16 +470,15 @@ def add_checklist(owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     try:
         cursor.execute("""
-INSERT INTO checklists (
-    owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
-    distance, date_of_race, memo, finished_place, checklist,
-    program_number, number_of_horses, odds, prize
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""",
-                       (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
-                        distance, date_of_race, memo, finished_place, checklist_json,
-                        program_number, number_of_horses, odds, prize))
+            INSERT INTO checklists (
+                owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
+                distance, date_of_race, memo, finished_place, checklist,
+                program_number, number_of_horses, odds
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
+              distance, date_of_race, memo, finished_place, checklist_json,
+              program_number, number_of_horses, odds))
         conn.commit()
     except sqlite3.IntegrityError:
         conn.close()
@@ -480,7 +488,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, venue_id,
                      race_name_id, distance, date_of_race, memo, finished_place,
-                     program_number, number_of_horses, odds, prize, checklist_data):
+                     program_number, number_of_horses, odds, checklist_data):
     conn = get_db_connection()
     cursor = conn.cursor()
     if horse_id is not None and date_of_race:
@@ -493,15 +501,14 @@ def update_checklist(checklist_id, owner_id, horse_id, jockey_id, trainer_id, ve
             return False, "Another checklist for this horse and race date is already registered."
     checklist_json = json.dumps(checklist_data) if checklist_data else None
     cursor.execute("""
-UPDATE checklists
-SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, race_name_id=?,
-    distance=?, date_of_race=?, memo=?, finished_place=?, checklist=?,
-    program_number=?, number_of_horses=?, odds=?, prize=?
-WHERE id=? AND owner_id=?
-""",
-                   (horse_id, jockey_id, trainer_id, venue_id, race_name_id,
-                    distance, date_of_race, memo, finished_place, checklist_json,
-                    program_number, number_of_horses, odds, prize, checklist_id, owner_id))
+        UPDATE checklists
+        SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, race_name_id=?,
+            distance=?, date_of_race=?, memo=?, finished_place=?, checklist=?,
+            program_number=?, number_of_horses=?, odds=?
+        WHERE id=? AND owner_id=?
+    """, (horse_id, jockey_id, trainer_id, venue_id, race_name_id,
+          distance, date_of_race, memo, finished_place, checklist_json,
+          program_number, number_of_horses, odds, checklist_id, owner_id))
     conn.commit()
     conn.close()
     return True, "Checklist updated!"
@@ -510,25 +517,25 @@ def get_user_checklists(owner_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
-SELECT checklists.id,
-       horses.id as horse_id, horses.horse_name,
-       jockeys.id as jockey_id, jockeys.jockey_name,
-       trainers.id as trainer_id, trainers.trainer_name,
-       venues.id as venue_id, venues.venue_name,
-       race_names.id as race_name_id, race_names.race_name,
-       checklists.distance, checklists.date_of_race,
-       checklists.memo, checklists.finished_place, checklists.checklist,
-       checklists.program_number, checklists.number_of_horses,
-       checklists.odds, checklists.prize
-FROM checklists
-LEFT JOIN horses ON checklists.horse_id = horses.id
-LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
-LEFT JOIN trainers ON checklists.trainer_id = trainers.id
-LEFT JOIN venues ON checklists.venue_id = venues.id
-LEFT JOIN race_names ON checklists.race_name_id = race_names.id
-WHERE checklists.owner_id = ?
-ORDER BY checklists.date_of_race DESC, checklists.id DESC
-""", (owner_id,))
+        SELECT checklists.id,
+               horses.id as horse_id, horses.horse_name,
+               jockeys.id as jockey_id, jockeys.jockey_name,
+               trainers.id as trainer_id, trainers.trainer_name,
+               venues.id as venue_id, venues.venue_name,
+               race_names.id as race_name_id, race_names.race_name,
+               checklists.distance, checklists.date_of_race,
+               checklists.memo, checklists.finished_place, checklists.checklist,
+               checklists.program_number, checklists.number_of_horses,
+               checklists.odds
+        FROM checklists
+        LEFT JOIN horses ON checklists.horse_id = horses.id
+        LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
+        LEFT JOIN trainers ON checklists.trainer_id = trainers.id
+        LEFT JOIN venues ON checklists.venue_id = venues.id
+        LEFT JOIN race_names ON checklists.race_name_id = race_names.id
+        WHERE checklists.owner_id = ?
+        ORDER BY checklists.date_of_race DESC, checklists.id DESC
+    """, (owner_id,))
     results = cursor.fetchall()
     conn.close()
     checklists = []
@@ -554,7 +561,6 @@ ORDER BY checklists.date_of_race DESC, checklists.id DESC
             "program_number": row["program_number"],
             "number_of_horses": row["number_of_horses"],
             "odds": row["odds"],
-            "prize": row["prize"],
         })
     return checklists
 
@@ -581,6 +587,7 @@ if st.session_state.logged_in:
         "Race Checklist",
         "Checklist Review"
     ])
+
     if st.sidebar.button("Logout", key="logout_btn"):
         st.session_state.logged_in = False
         st.session_state.username = ""
@@ -758,6 +765,7 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+
         st.write("### Edit/Delete Registered Race Names")
         race_list = get_user_race_names(st.session_state.user_id)
         if not race_list:
@@ -797,6 +805,7 @@ if st.session_state.logged_in:
                     st.success(msg)
                 else:
                     st.error(msg)
+
         st.write("### Edit/Delete Registered Criteria")
         criteria_list = get_user_criteria(st.session_state.user_id)
         if not criteria_list:
@@ -831,6 +840,7 @@ if st.session_state.logged_in:
         venues = get_user_venues(st.session_state.user_id)
         race_names = get_user_race_names(st.session_state.user_id)
         criteria = get_user_criteria(st.session_state.user_id)
+
         horse_options = ["(No horse selected)"] + [h["horse_name"] for h in horses]
         horse_ids = [None] + [h["id"] for h in horses]
         jockey_options = ["(No jockey selected)"] + [j["jockey_name"] for j in jockeys]
@@ -841,6 +851,7 @@ if st.session_state.logged_in:
         venue_ids = [None] + [v["id"] for v in venues]
         race_options = ["(No race name selected)"] + [r["race_name"] for r in race_names]
         race_ids = [None] + [r["id"] for r in race_names]
+
         selected_horse_idx = st.selectbox("Select Horse (optional)", range(len(horse_options)),
                                           format_func=lambda x: horse_options[x], key="race_horse_select")
         selected_jockey_idx = st.selectbox("Select Jockey (optional)", range(len(jockey_options)),
@@ -862,12 +873,12 @@ if st.session_state.logged_in:
                                            key="race_number_of_horses_input")
         odds = st.number_input("Odds (optional)", min_value=0.0, max_value=999.9, value=0.0, step=0.1,
                                key="race_odds_input")
-        prize = st.number_input("Prize (optional)", min_value=0.0, max_value=1000000000.0,
-                                value=0.0, step=1000.0, key="race_prize_input")
+
         checklist_data = {}
         st.write("Check the criteria that apply for this race (optional):")
         for c in criteria:
             checklist_data[c["criteria_name"]] = st.checkbox(c["criteria_name"], key=f"check_{c['id']}")
+
         save_checklist_clicked = st.button("Save Checklist", key="save_checklist_btn")
         if save_checklist_clicked:
             horse_id = horse_ids[selected_horse_idx]
@@ -876,7 +887,6 @@ if st.session_state.logged_in:
             venue_id = venue_ids[selected_venue_idx]
             race_name_id = race_ids[selected_race_idx]
             odds_val = odds if odds > 0 else None
-            prize_val = prize if prize > 0 else None
             success, msg = add_checklist(
                 st.session_state.user_id,
                 horse_id,
@@ -892,16 +902,16 @@ if st.session_state.logged_in:
                 program_number if program_number > 0 else None,
                 number_of_horses if number_of_horses > 0 else None,
                 odds_val,
-                prize_val,
             )
             if success:
                 st.success(msg)
             else:
                 st.error(msg)
 
-        # === Batch Import & Template Download ===
+        # === Batch Import & Template Download (odds も含めるなら追加で列を足してもよい) ===
         st.markdown("---")
         st.subheader("Batch Import Race Checklists (CSV or Excel)")
+
         sample_data = pd.DataFrame({
             "horse": ["Sample Horse A", "Sample Horse B"],
             "jockey": ["", ""],
@@ -914,15 +924,18 @@ if st.session_state.logged_in:
         })
         sample_data = sample_data[["horse", "jockey", "trainer", "venue", "race_name",
                                    "distance", "date_of_race", "memo"]]
+
         template_bytes = io.BytesIO()
         sample_data.to_csv(template_bytes, index=False)
         template_bytes.seek(0)
+
         st.download_button(
             label="📥 Download CSV Template",
             data=template_bytes,
             file_name="race_checklist_template.csv",
             mime="text/csv"
         )
+
         uploaded_file = st.file_uploader(
             "Upload CSV or XLSX file with columns: horse, jockey, trainer, venue, race_name, distance, date_of_race, memo (date: YYYY-MM-DD or YYYY/MM/DD)",
             type=["csv", "xlsx"],
@@ -1007,10 +1020,11 @@ if st.session_state.logged_in:
                         race_name_id = get_or_add_race_name(row["race_name"])
                         try:
                             dist = int(row["distance"]) if pd.notna(row["distance"]) else None
-                        except Exception:
+                        except:
                             dist = None
                         date_val = normalize_date(row.get("date_of_race", None))
                         memo_val = str(row["memo"]) if pd.notna(row["memo"]) else ""
+
                         ok, msg = add_checklist(
                             st.session_state.user_id,
                             horse_id,
@@ -1021,7 +1035,6 @@ if st.session_state.logged_in:
                             dist,
                             date_val,
                             memo_val,
-                            None,
                             None,
                             None,
                             None,
@@ -1048,6 +1061,7 @@ if st.session_state.logged_in:
         venues = get_user_venues(st.session_state.user_id)
         race_names = get_user_race_names(st.session_state.user_id)
         criteria = get_user_criteria(st.session_state.user_id)
+
         horse_options = ["(No horse selected)"] + [h["horse_name"] for h in horses]
         horse_ids = [None] + [h["id"] for h in horses]
         jockey_options = ["(No jockey selected)"] + [j["jockey_name"] for j in jockeys]
@@ -1085,12 +1099,6 @@ if st.session_state.logged_in:
                 filter_odds_to = st.number_input(
                     "To Odds", min_value=0.0, max_value=999.9, value=999.9, step=0.1, key="filter_odds_to"
                 )
-                filter_prize_from = st.number_input(
-                    "From Prize", min_value=0.0, max_value=1000000000.0, value=0.0, step=1000.0, key="filter_prize_from"
-                )
-                filter_prize_to = st.number_input(
-                    "To Prize", min_value=0.0, max_value=1000000000.0, value=1000000000.0, step=1000.0, key="filter_prize_to"
-                )
             with col2:
                 filter_criteria = st.multiselect("Filter by Criteria (must match all selected)",
                                                  [c["criteria_name"] for c in criteria], key="filter_criteria")
@@ -1116,6 +1124,7 @@ if st.session_state.logged_in:
                 continue
             if filter_race_idx != 0 and entry.get("race_name_id") != race_ids[filter_race_idx]:
                 continue
+
             entry_date = None
             try:
                 entry_date = datetime.strptime(entry['date_of_race'], "%Y-%m-%d").date()
@@ -1125,25 +1134,31 @@ if st.session_state.logged_in:
                 continue
             if filter_date_to and entry_date and entry_date > filter_date_to:
                 continue
+
             if filter_criteria:
                 if not entry["checklist"]:
                     continue
                 if not all(entry["checklist"].get(c, False) for c in filter_criteria):
                     continue
+
             distance_val = entry["distance"] if entry["distance"] is not None else 0
             if filter_distance_from is not None and distance_val < filter_distance_from:
                 continue
             if filter_distance_to is not None and distance_val > filter_distance_to:
                 continue
+
             if filter_memo_keyword and filter_memo_keyword.strip():
                 if filter_memo_keyword.strip().lower() not in (entry['memo'] or "").lower():
                     continue
+
             if filter_program_number and entry.get('program_number', 0) != filter_program_number:
                 continue
             if filter_number_of_horses and entry.get('number_of_horses', 0) != filter_number_of_horses:
                 continue
+
             if filter_places and str(entry.get('finished_place', '')).strip() not in filter_places:
                 continue
+
             odds_val = entry.get("odds", None)
             if odds_val is not None:
                 if odds_val < filter_odds_from or odds_val > filter_odds_to:
@@ -1151,67 +1166,53 @@ if st.session_state.logged_in:
             else:
                 if filter_odds_from > 0.0:
                     continue
-            prize_val = entry.get("prize", None)
-            if prize_val is not None:
-                if prize_val < filter_prize_from or prize_val > filter_prize_to:
-                    continue
-            else:
-                if filter_prize_from > 0.0:
-                    continue
+
             filtered_checklists.append(entry)
 
-        # Summary line with averages
         if filtered_checklists:
             shown = [x for x in filtered_checklists if str(x['finished_place']).strip().isdigit()]
             first = [x for x in shown if int(x['finished_place']) == 1]
             within3 = [x for x in shown if int(x['finished_place']) in (1, 2, 3)]
-            avg_odds = None
-            avg_prize = None
-            odds_values = [x["odds"] for x in filtered_checklists if isinstance(x.get("odds"), (int, float))]
-            prize_values = [x["prize"] for x in filtered_checklists if isinstance(x.get("prize"), (int, float))]
-            if odds_values:
-                avg_odds = sum(odds_values) / len(odds_values)
-            if prize_values:
-                avg_prize = sum(prize_values) / len(prize_values)
-            avg_odds_str = f"{avg_odds:.2f}" if avg_odds is not None else "-"
-            avg_prize_str = f"{avg_prize:,.0f}" if avg_prize is not None else "-"
             st.markdown(
-                f"**Filtered Results:** {len(filtered_checklists)} races. "
-                f"・Average Odds: {avg_odds_str} / Average Prize: {avg_prize_str} \n"
-                f"・Probability (Finished within 3rd): "
+                f"**Filtered Results:** {len(filtered_checklists)} races.  \n"
+                f"・Probability (Finished within 3rd):  "
                 + (f"{(len(within3)/len(filtered_checklists)*100):.1f}%" if filtered_checklists else "-")
-                + " / "
-                f"・Probability (Won): "
+                + "　/　"
+                f"・Probability (Won):  "
                 + (f"{(len(first)/len(filtered_checklists)*100):.1f}%" if filtered_checklists else "-")
             )
-        else:
-            st.info("No checklists found with the selected filters.")
 
-        if filtered_checklists:
+        if not filtered_checklists:
+            st.info("No checklists found with the selected filters.")
+        else:
             if "page_num" not in st.session_state:
                 st.session_state.page_num = 0
             if "page_size" not in st.session_state:
                 st.session_state.page_size = 20
             page_size = st.session_state.page_size
             total_pages = (len(filtered_checklists) - 1) // page_size + 1 if len(filtered_checklists) > 0 else 1
+
             if "last_page_size" not in st.session_state or st.session_state.last_page_size != page_size:
                 st.session_state.page_num = 0
                 st.session_state.last_page_size = page_size
+
             if st.session_state.page_num >= total_pages:
                 st.session_state.page_num = max(total_pages - 1, 0)
+
             page_num = st.session_state.page_num
             start_idx = page_num * page_size
             end_idx = start_idx + page_size
             paged_checklists = filtered_checklists[start_idx:end_idx]
+
             st.caption(f"Showing {start_idx+1}-{min(end_idx, len(filtered_checklists))} of {len(filtered_checklists)} checklists")
+
             for entry in paged_checklists:
                 expander_title = (
                     f"Horse: {entry['horse_name']} | Jockey: {entry['jockey_name']} | "
                     f"Trainer: {entry['trainer_name']} | Venue: {entry['venue_name']} | "
                     f"Race Name: {entry.get('race_name', '(No race name selected)')} | "
                     f"Distance: {entry['distance']}m | Date: {entry['date_of_race']} | "
-                    f"Finished Place: {entry['finished_place']} | Odds: {entry.get('odds', '-')} | "
-                    f"Prize: {entry.get('prize', '-')}"
+                    f"Finished Place: {entry['finished_place']} | Odds: {entry.get('odds', '-')}"
                 )
                 with st.expander(expander_title):
                     horse_idx = horse_ids.index(entry["horse_id"]) if entry["horse_id"] in horse_ids else 0
@@ -1219,6 +1220,7 @@ if st.session_state.logged_in:
                     trainer_idx = trainer_ids.index(entry["trainer_id"]) if entry["trainer_id"] in trainer_ids else 0
                     venue_idx = venue_ids.index(entry["venue_id"]) if entry["venue_id"] in venue_ids else 0
                     race_idx = race_ids.index(entry["race_name_id"]) if entry.get("race_name_id") in race_ids else 0
+
                     edit_horse_idx = st.selectbox("Horse", range(len(horse_options)), index=horse_idx,
                                                   format_func=lambda x: horse_options[x], key=f"edit_horse_{entry['id']}")
                     edit_jockey_idx = st.selectbox("Jockey", range(len(jockey_options)), index=jockey_idx,
@@ -1253,17 +1255,14 @@ if st.session_state.logged_in:
                         value=float(entry.get("odds") or 0.0),
                         step=0.1, key=f"edit_odds_{entry['id']}"
                     )
-                    edit_prize = st.number_input(
-                        "Prize", min_value=0.0, max_value=1000000000.0,
-                        value=float(entry.get("prize") or 0.0),
-                        step=1000.0, key=f"edit_prize_{entry['id']}"
-                    )
+
                     edit_checklist_data = {}
                     for c in criteria:
                         prev = entry['checklist'].get(c["criteria_name"], False)
                         edit_checklist_data[c["criteria_name"]] = st.checkbox(
                             c["criteria_name"], value=prev, key=f"edit_check_{entry['id']}_{c['id']}"
                         )
+
                     if st.button("Update", key=f"update_btn_{entry['id']}"):
                         new_horse_id = horse_ids[edit_horse_idx]
                         new_jockey_id = jockey_ids[edit_jockey_idx]
@@ -1271,7 +1270,6 @@ if st.session_state.logged_in:
                         new_venue_id = venue_ids[edit_venue_idx]
                         new_race_id = race_ids[edit_race_idx]
                         odds_val = edit_odds if edit_odds > 0 else None
-                        prize_val = edit_prize if edit_prize > 0 else None
                         success, msg = update_checklist(
                             entry['id'],
                             st.session_state.user_id,
@@ -1287,7 +1285,6 @@ if st.session_state.logged_in:
                             edit_program_number,
                             edit_number_of_horses,
                             odds_val,
-                            prize_val,
                             edit_checklist_data if any(edit_checklist_data.values()) else None
                         )
                         if success:
@@ -1295,7 +1292,30 @@ if st.session_state.logged_in:
                             st.rerun()
                         else:
                             st.error(msg)
-            st.markdown("---")
+                    st.markdown("---")
+
+            st.markdown(
+                """
+                <style>
+                .pagination-line {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.8em;
+                    margin-top: 1em;
+                }
+                .pagination-btn {
+                    padding: 2px 10px;
+                    font-size: 0.95em;
+                    margin: 0 2px;
+                }
+                .page-dropdown {
+                    min-width: 60px;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+
             col1, col2, col3, col4 = st.columns([1.3, 1.1, 1.1, 5])
             with col1:
                 new_page_size = st.selectbox("Items per page", [20, 50, 100],
@@ -1316,8 +1336,10 @@ if st.session_state.logged_in:
                 st.write(f"Page {page_num+1} / {total_pages}")
             with col4:
                 pass
+
 else:
     tab1, tab2 = st.tabs(["Login", "Register"])
+
     with tab2:
         st.header("Register")
         reg_username = st.text_input("Username", key="reg_username_unique")
@@ -1334,6 +1356,7 @@ else:
                     st.success(msg)
                 else:
                     st.error(msg)
+
     with tab1:
         st.header("Login")
         log_username = st.text_input("Username", key="log_username_unique")
