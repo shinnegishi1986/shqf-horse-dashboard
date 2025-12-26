@@ -1668,6 +1668,7 @@ if st.session_state.logged_in:
             filtered_checklists.append(entry)
 
         # --- Summary line with averages (within 3rd) ---
+        # --- Summary line with averages (odds: within 3rd, prize: within 5th) ---
         if filtered_checklists:
             shown = [
                 x
@@ -1680,19 +1681,28 @@ if st.session_state.logged_in:
                 for x in shown
                 if int(x["finished_place"]) in (1, 2, 3)
             ]
+            within5 = [
+                x
+                for x in shown
+                if int(x["finished_place"]) in (1, 2, 3, 4, 5)
+            ]
 
             avg_odds = None
             avg_prize = None
+
+            # 平均オッズは従来通り「3着以内」
             odds_values = [
                 x["odds"]
                 for x in within3
                 if isinstance(x.get("odds"), (int, float))
             ]
+            # 平均賞金は「5着以内」
             prize_values = [
                 x["prize"]
-                for x in within3
+                for x in within5
                 if isinstance(x.get("prize"), (int, float))
             ]
+
             if odds_values:
                 avg_odds = sum(odds_values) / len(odds_values)
             if prize_values:
@@ -1704,7 +1714,7 @@ if st.session_state.logged_in:
             st.markdown(
                 f"**Filtered Results:** {len(filtered_checklists)} races. "
                 f"・Average Odds (within 3rd): {avg_odds_str} / "
-                f"Average Prize (within 3rd): {avg_prize_str} \n"
+                f"Average Prize (within 5th): {avg_prize_str} \n"
                 f"・Probability (Finished within 3rd): "
                 + (
                     f"{(len(within3) / len(filtered_checklists) * 100):.1f}%"
@@ -1721,6 +1731,7 @@ if st.session_state.logged_in:
             )
         else:
             st.info("No checklists found with the selected filters.")
+
 
         if filtered_checklists:
             if "page_num" not in st.session_state:
