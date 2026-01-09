@@ -33,6 +33,9 @@ def init_db():
         number_of_horses INTEGER,
         odds REAL,
         prize REAL,
+        -- ★ 追加: 枠番・馬番（オプション）
+        bracket_number INTEGER,
+        horse_number INTEGER,
         FOREIGN KEY(owner_id) REFERENCES users(id),
         FOREIGN KEY(horse_id) REFERENCES horses(id),
         FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
@@ -72,6 +75,11 @@ def init_db():
         cursor.execute("ALTER TABLE checklists ADD COLUMN odds REAL")
     if "prize" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN prize REAL")
+    # ★ 追加: 枠番・馬番のマイグレーション
+    if "bracket_number" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN bracket_number INTEGER")
+    if "horse_number" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN horse_number INTEGER")
 
     # Unique index for owner/horse/date
     cursor.execute("PRAGMA index_list(checklists)")
@@ -611,6 +619,8 @@ def add_checklist(
     number_of_horses=None,
     odds=None,
     prize=None,
+    bracket_number=None,   # ★ 追加
+    horse_number=None,     # ★ 追加
 ):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -632,9 +642,10 @@ def add_checklist(
             INSERT INTO checklists (
                 owner_id, horse_id, jockey_id, trainer_id, venue_id, race_name_id,
                 distance, date_of_race, memo, finished_place, checklist,
-                program_number, number_of_horses, odds, prize
+                program_number, number_of_horses, odds, prize,
+                bracket_number, horse_number
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 owner_id,
@@ -652,6 +663,8 @@ def add_checklist(
                 number_of_horses,
                 odds,
                 prize,
+                bracket_number,
+                horse_number,
             ),
         )
         conn.commit()
@@ -679,6 +692,8 @@ def update_checklist(
     odds,
     prize,
     checklist_data,
+    bracket_number=None,  # ★ 追加
+    horse_number=None,    # ★ 追加
 ):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -699,7 +714,8 @@ def update_checklist(
         UPDATE checklists
         SET horse_id=?, jockey_id=?, trainer_id=?, venue_id=?, race_name_id=?,
             distance=?, date_of_race=?, memo=?, finished_place=?, checklist=?,
-            program_number=?, number_of_horses=?, odds=?, prize=?
+            program_number=?, number_of_horses=?, odds=?, prize=?,
+            bracket_number=?, horse_number=?
         WHERE id=? AND owner_id=?
         """,
         (
@@ -717,6 +733,8 @@ def update_checklist(
             number_of_horses,
             odds,
             prize,
+            bracket_number,
+            horse_number,
             checklist_id,
             owner_id,
         ),
@@ -740,7 +758,8 @@ def get_user_checklists(owner_id):
             checklists.distance, checklists.date_of_race,
             checklists.memo, checklists.finished_place, checklists.checklist,
             checklists.program_number, checklists.number_of_horses,
-            checklists.odds, checklists.prize
+            checklists.odds, checklists.prize,
+            checklists.bracket_number, checklists.horse_number
         FROM checklists
         LEFT JOIN horses ON checklists.horse_id = horses.id
         LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
@@ -780,6 +799,8 @@ def get_user_checklists(owner_id):
                 "number_of_horses": row["number_of_horses"],
                 "odds": row["odds"],
                 "prize": row["prize"],
+                "bracket_number": row["bracket_number"],
+                "horse_number": row["horse_number"],
             }
         )
     return checklists
@@ -1210,6 +1231,23 @@ if st.session_state.logged_in:
             step=1000.0,
             key="race_prize_input",
         )
+        # ★ 追加: 枠番・馬番（オプション）
+        bracket_number = st.number_input(
+            "Bracket Number (optional)(枠番)",
+            min_value=0,
+            max_value=8,
+            value=0,
+            step=1,
+            key="race_bracket_number_input",
+        )
+        horse_number = st.number_input(
+            "Horse Number (optional)(馬番)",
+            min_value=0,
+            max_value=18,
+            value=0,
+            step=1,
+            key="race_horse_number_input",
+        )
 
         checklist_data = {}
         st.write("Check the criteria that apply for this race (optional):")
@@ -1228,6 +1266,8 @@ if st.session_state.logged_in:
 
             odds_val = odds if odds > 0 else None
             prize_val = prize if prize > 0 else None
+            bracket_val = bracket_number if bracket_number > 0 else None
+            horse_no_val = horse_number if horse_number > 0 else None
 
             success, msg = add_checklist(
                 st.session_state.user_id,
@@ -1245,6 +1285,8 @@ if st.session_state.logged_in:
                 number_of_horses if number_of_horses > 0 else None,
                 odds_val,
                 prize_val,
+                bracket_val,
+                horse_no_val,
             )
             if success:
                 st.success(msg)
@@ -1438,6 +1480,7 @@ if st.session_state.logged_in:
                             None,
                             None,
                             None,
+                            None,
                         )
                         if ok:
                             success_count += 1
@@ -1565,7 +1608,6 @@ if st.session_state.logged_in:
                     step=1000.0,
                     key="filter_prize_to",
                 )
-
             with col2:
                 filter_criteria = st.multiselect(
                     "Filter by Criteria (must match all selected)",
@@ -1598,6 +1640,46 @@ if st.session_state.logged_in:
                     "Filter by Finished Place (着順)",
                     [str(i) for i in range(1, 18)],
                     help="例: 上位3着のみ",
+                )
+                # ★ 右側に枠番・馬番の検索を追加（範囲指定 & 初期状態は無効）
+                filter_bracket_from = st.number_input(
+                    "From Bracket Number (枠番)",
+                    min_value=1,
+                    max_value=8,
+                    value=1,
+                    step=1,
+                    key="filter_bracket_from",
+                )
+                filter_bracket_to = st.number_input(
+                    "To Bracket Number (枠番)",
+                    min_value=1,
+                    max_value=8,
+                    value=8,
+                    step=1,
+                    key="filter_bracket_to",
+                )
+                enable_bracket_filter = st.checkbox(
+                    "Enable Bracket Number filter", value=False, key="enable_bracket_filter"
+                )
+
+                filter_horse_from = st.number_input(
+                    "From Horse Number (馬番)",
+                    min_value=1,
+                    max_value=18,
+                    value=1,
+                    step=1,
+                    key="filter_horse_from",
+                )
+                filter_horse_to = st.number_input(
+                    "To Horse Number (馬番)",
+                    min_value=1,
+                    max_value=18,
+                    value=18,
+                    step=1,
+                    key="filter_horse_to",
+                )
+                enable_horse_filter = st.checkbox(
+                    "Enable Horse Number filter", value=False, key="enable_horse_filter"
                 )
 
         filtered_checklists = []
@@ -1665,9 +1747,24 @@ if st.session_state.logged_in:
                 if filter_prize_from > 0.0:
                     continue
 
+            # ★ 枠番フィルタ（チェックボックスONの時だけ適用）
+            if enable_bracket_filter:
+                b = entry.get("bracket_number")
+                if b is None:
+                    continue
+                if b < filter_bracket_from or b > filter_bracket_to:
+                    continue
+
+            # ★ 馬番フィルタ（チェックボックスONの時だけ適用）
+            if enable_horse_filter:
+                hn = entry.get("horse_number")
+                if hn is None:
+                    continue
+                if hn < filter_horse_from or hn > filter_horse_to:
+                    continue
+
             filtered_checklists.append(entry)
 
-        # --- Summary line with averages (within 3rd) ---
         # --- Summary line with averages (odds: within 3rd, prize: within 5th) ---
         if filtered_checklists:
             shown = [
@@ -1690,13 +1787,11 @@ if st.session_state.logged_in:
             avg_odds = None
             avg_prize = None
 
-            # 平均オッズは従来通り「3着以内」
             odds_values = [
                 x["odds"]
                 for x in within3
                 if isinstance(x.get("odds"), (int, float))
             ]
-            # 平均賞金は「5着以内」
             prize_values = [
                 x["prize"]
                 for x in within5
@@ -1731,7 +1826,6 @@ if st.session_state.logged_in:
             )
         else:
             st.info("No checklists found with the selected filters.")
-
 
         if filtered_checklists:
             if "page_num" not in st.session_state:
@@ -1773,9 +1867,10 @@ if st.session_state.logged_in:
                     f"Date: {entry['date_of_race']} | "
                     f"Finished Place: {entry['finished_place']} | "
                     f"Odds: {entry.get('odds', '-')} | "
-                    f"Prize: {entry.get('prize', '-')}"
+                    f"Prize: {entry.get('prize', '-')} | "
+                    f"Bracket: {entry.get('bracket_number', '-')} | "
+                    f"Horse No.: {entry.get('horse_number', '-')}"
                 )
-
                 with st.expander(expander_title):
                     horse_idx = (
                         horse_ids.index(entry["horse_id"])
@@ -1890,6 +1985,23 @@ if st.session_state.logged_in:
                         step=1000.0,
                         key=f"edit_prize_{entry['id']}",
                     )
+                    # ★ 枠番・馬番編集
+                    edit_bracket_number = st.number_input(
+                        "Bracket Number (枠番)",
+                        min_value=0,
+                        max_value=8,
+                        value=entry.get("bracket_number") or 0,
+                        step=1,
+                        key=f"edit_bracket_number_{entry['id']}",
+                    )
+                    edit_horse_number = st.number_input(
+                        "Horse Number (馬番)",
+                        min_value=0,
+                        max_value=18,
+                        value=entry.get("horse_number") or 0,
+                        step=1,
+                        key=f"edit_horse_number_{entry['id']}",
+                    )
 
                     edit_checklist_data = {}
                     for c in criteria:
@@ -1909,6 +2021,8 @@ if st.session_state.logged_in:
 
                         odds_val = edit_odds if edit_odds > 0 else None
                         prize_val = edit_prize if edit_prize > 0 else None
+                        bracket_val = edit_bracket_number if edit_bracket_number > 0 else None
+                        horse_no_val = edit_horse_number if edit_horse_number > 0 else None
 
                         success, msg = update_checklist(
                             entry["id"],
@@ -1929,6 +2043,8 @@ if st.session_state.logged_in:
                             edit_checklist_data
                             if any(edit_checklist_data.values())
                             else None,
+                            bracket_val,
+                            horse_no_val,
                         )
                         if success:
                             st.success(msg)
@@ -1981,7 +2097,6 @@ else:
         )
         reg_invite = st.text_input("Invitation Code", key="reg_invite_unique")
         register_clicked = st.button("Register", key="register_btn")
-
         if register_clicked:
             if (
                 not reg_username.strip()
@@ -2009,7 +2124,6 @@ else:
             "Password", type="password", key="log_password_unique"
         )
         login_clicked = st.button("Login", key="login_btn")
-
         if login_clicked:
             if not log_username.strip() or not log_password.strip():
                 st.error("Please fill all fields.")
