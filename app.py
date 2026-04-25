@@ -1197,7 +1197,7 @@ if st.session_state.logged_in:
             key="race_distance_input",
         )
         date_of_race = st.date_input(
-            "Date of Race", value=date.today(), key="race_date_input"
+            "Date of Race", min_value=date(1980, 1, 1),value=date.today(), key="race_date_input"
         )
         memo = st.text_area("Memo (optional)", key="race_memo_input")
         finished_place = st.text_input(
