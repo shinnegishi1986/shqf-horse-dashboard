@@ -180,6 +180,71 @@ def get_db_connection():
     return conn
 
 
+# --- CSV Export Helpers ---
+def checklist_to_export_rows(checklists):
+    rows = []
+    for entry in checklists:
+        checked_criteria = []
+        checklist_dict = entry.get("checklist", {}) or {}
+        for k, v in checklist_dict.items():
+            if v:
+                checked_criteria.append(k)
+
+        rows.append(
+            {
+                "id": entry.get("id"),
+                "horse_name": entry.get("horse_name", ""),
+                "jockey_name": entry.get("jockey_name", ""),
+                "trainer_name": entry.get("trainer_name", ""),
+                "venue_name": entry.get("venue_name", ""),
+                "race_name": entry.get("race_name", ""),
+                "distance": entry.get("distance"),
+                "date_of_race": entry.get("date_of_race", ""),
+                "memo": entry.get("memo", ""),
+                "finished_place": entry.get("finished_place", ""),
+                "program_number": entry.get("program_number"),
+                "number_of_horses": entry.get("number_of_horses"),
+                "odds": entry.get("odds"),
+                "prize": entry.get("prize"),
+                "bracket_number": entry.get("bracket_number"),
+                "horse_number": entry.get("horse_number"),
+                "horse_weight": entry.get("horse_weight"),
+                "checked_criteria": " | ".join(checked_criteria),
+            }
+        )
+    return rows
+
+
+def build_csv_download_bytes(filtered_checklists, encoding="utf-8-sig"):
+    export_rows = checklist_to_export_rows(filtered_checklists)
+    df = pd.DataFrame(export_rows)
+    if df.empty:
+        df = pd.DataFrame(
+            columns=[
+                "id",
+                "horse_name",
+                "jockey_name",
+                "trainer_name",
+                "venue_name",
+                "race_name",
+                "distance",
+                "date_of_race",
+                "memo",
+                "finished_place",
+                "program_number",
+                "number_of_horses",
+                "odds",
+                "prize",
+                "bracket_number",
+                "horse_number",
+                "horse_weight",
+                "checked_criteria",
+            ]
+        )
+    csv_text = df.to_csv(index=False)
+    return csv_text.encode(encoding, errors="replace")
+
+
 # --- User Functions ---
 def register_user(username, display_name, password, invitation_code):
     conn = get_db_connection()
@@ -777,6 +842,18 @@ def update_checklist(
     conn.commit()
     conn.close()
     return True, "Checklist updated!"
+
+
+def delete_checklist(checklist_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM checklists WHERE id = ? AND owner_id = ?",
+        (checklist_id, owner_id),
+    )
+    conn.commit()
+    conn.close()
+    return True, "Checklist deleted!"
 
 
 def get_user_checklists(owner_id):
@@ -1626,25 +1703,6 @@ if st.session_state.logged_in:
                     step=1000.0,
                     key="filter_prize_to",
                 )
-                filter_weight_from = st.number_input(
-                    "From Horse Weight (kg)",
-                    min_value=0.0,
-                    max_value=999.9,
-                    value=0.0,
-                    step=0.1,
-                    key="filter_weight_from",
-                )
-                filter_weight_to = st.number_input(
-                    "To Horse Weight (kg)",
-                    min_value=0.0,
-                    max_value=999.9,
-                    value=999.9,
-                    step=0.1,
-                    key="filter_weight_to",
-                )
-                enable_weight_filter = st.checkbox(
-                    "Enable Horse Weight filter", value=False, key="enable_weight_filter"
-                )
 
             with col2:
                 filter_criteria = st.multiselect(
@@ -1652,11 +1710,11 @@ if st.session_state.logged_in:
                     [c["criteria_name"] for c in criteria],
                     key="filter_criteria",
                 )
-                criteria_match_mode = st.radio(
-                    "Criteria Match Mode",
+                criteria_mode = st.radio(
+                    "Criteria match mode",
                     ["AND", "OR", "NOT matched by criteria"],
                     horizontal=True,
-                    key="criteria_match_mode",
+                    key="criteria_mode",
                 )
                 filter_distance_from = st.number_input(
                     "From Distance (meters)",
@@ -1683,7 +1741,7 @@ if st.session_state.logged_in:
                 filter_places = st.multiselect(
                     "Filter by Finished Place (着順)",
                     [str(i) for i in range(1, 18)],
-                    help="Example: top 3 only",
+                    help="例: 上位3着のみ",
                 )
                 filter_bracket_from = st.number_input(
                     "From Bracket Number (枠番)",
@@ -1725,6 +1783,26 @@ if st.session_state.logged_in:
                     "Enable Horse Number filter", value=False, key="enable_horse_filter"
                 )
 
+                filter_weight_from = st.number_input(
+                    "From Horse Weight (kg)",
+                    min_value=0.0,
+                    max_value=999.9,
+                    value=0.0,
+                    step=0.1,
+                    key="filter_weight_from",
+                )
+                filter_weight_to = st.number_input(
+                    "To Horse Weight (kg)",
+                    min_value=0.0,
+                    max_value=999.9,
+                    value=999.9,
+                    step=0.1,
+                    key="filter_weight_to",
+                )
+                enable_weight_filter = st.checkbox(
+                    "Enable Horse Weight filter", value=False, key="enable_weight_filter"
+                )
+
         filtered_checklists = []
         for entry in checklists:
             if filter_horse_idx != 0 and entry["horse_id"] != horse_ids[filter_horse_idx]:
@@ -1750,18 +1828,15 @@ if st.session_state.logged_in:
                 continue
 
             if filter_criteria:
-                checklist_map = entry.get("checklist") or {}
-                if criteria_match_mode == "AND":
-                    matched = all(checklist_map.get(c, False) for c in filter_criteria)
-                    if not matched:
+                checklist_map = entry.get("checklist", {}) or {}
+                if criteria_mode == "AND":
+                    if not all(checklist_map.get(c, False) for c in filter_criteria):
                         continue
-                elif criteria_match_mode == "OR":
-                    matched = any(checklist_map.get(c, False) for c in filter_criteria)
-                    if not matched:
+                elif criteria_mode == "OR":
+                    if not any(checklist_map.get(c, False) for c in filter_criteria):
                         continue
-                elif criteria_match_mode == "NOT matched by criteria":
-                    matched = any(checklist_map.get(c, False) for c in filter_criteria)
-                    if matched:
+                elif criteria_mode == "NOT matched by criteria":
+                    if any(checklist_map.get(c, False) for c in filter_criteria):
                         continue
 
             distance_val = entry["distance"] if entry["distance"] is not None else 0
@@ -1823,7 +1898,9 @@ if st.session_state.logged_in:
             filtered_checklists.append(entry)
 
         if filtered_checklists:
-            shown = [x for x in filtered_checklists if str(x["finished_place"]).strip().isdigit()]
+            shown = [
+                x for x in filtered_checklists if str(x["finished_place"]).strip().isdigit()
+            ]
             first = [x for x in shown if int(x["finished_place"]) == 1]
             within3 = [x for x in shown if int(x["finished_place"]) in (1, 2, 3)]
             within5 = [x for x in shown if int(x["finished_place"]) in (1, 2, 3, 4, 5)]
@@ -1831,8 +1908,12 @@ if st.session_state.logged_in:
             avg_odds = None
             avg_prize = None
 
-            odds_values = [x["odds"] for x in within3 if isinstance(x.get("odds"), (int, float))]
-            prize_values = [x["prize"] for x in within5 if isinstance(x.get("prize"), (int, float))]
+            odds_values = [
+                x["odds"] for x in within3 if isinstance(x.get("odds"), (int, float))
+            ]
+            prize_values = [
+                x["prize"] for x in within5 if isinstance(x.get("prize"), (int, float))
+            ]
 
             if odds_values:
                 avg_odds = sum(odds_values) / len(odds_values)
@@ -1853,13 +1934,36 @@ if st.session_state.logged_in:
                     else "-"
                 )
                 + " / "
-                + f"・Probability (Won): "
+                f"・Probability (Won): "
                 + (
                     f"{(len(first) / len(filtered_checklists) * 100):.1f}%"
                     if filtered_checklists
                     else "-"
                 )
             )
+
+            st.markdown("### Download Filtered Results as CSV")
+            export_col1, export_col2 = st.columns(2)
+
+            with export_col1:
+                utf8_bytes = build_csv_download_bytes(filtered_checklists, encoding="utf-8-sig")
+                st.download_button(
+                    label="📥 Download CSV (UTF-8 BOM)",
+                    data=utf8_bytes,
+                    file_name="filtered_checklists_utf8.csv",
+                    mime="text/csv",
+                    key="download_filtered_utf8_csv",
+                )
+
+            with export_col2:
+                sjis_bytes = build_csv_download_bytes(filtered_checklists, encoding="shift_jis")
+                st.download_button(
+                    label="📥 Download CSV (Shift-JIS)",
+                    data=sjis_bytes,
+                    file_name="filtered_checklists_sjis.csv",
+                    mime="text/csv",
+                    key="download_filtered_sjis_csv",
+                )
         else:
             st.info("No checklists found with the selected filters.")
 
@@ -1909,11 +2013,31 @@ if st.session_state.logged_in:
                     f"Horse Weight: {entry.get('horse_weight', '-')}"
                 )
                 with st.expander(expander_title):
-                    horse_idx = horse_ids.index(entry["horse_id"]) if entry["horse_id"] in horse_ids else 0
-                    jockey_idx = jockey_ids.index(entry["jockey_id"]) if entry["jockey_id"] in jockey_ids else 0
-                    trainer_idx = trainer_ids.index(entry["trainer_id"]) if entry["trainer_id"] in trainer_ids else 0
-                    venue_idx = venue_ids.index(entry["venue_id"]) if entry["venue_id"] in venue_ids else 0
-                    race_idx = race_ids.index(entry["race_name_id"]) if entry.get("race_name_id") in race_ids else 0
+                    horse_idx = (
+                        horse_ids.index(entry["horse_id"])
+                        if entry["horse_id"] in horse_ids
+                        else 0
+                    )
+                    jockey_idx = (
+                        jockey_ids.index(entry["jockey_id"])
+                        if entry["jockey_id"] in jockey_ids
+                        else 0
+                    )
+                    trainer_idx = (
+                        trainer_ids.index(entry["trainer_id"])
+                        if entry["trainer_id"] in trainer_ids
+                        else 0
+                    )
+                    venue_idx = (
+                        venue_ids.index(entry["venue_id"])
+                        if entry["venue_id"] in venue_ids
+                        else 0
+                    )
+                    race_idx = (
+                        race_ids.index(entry["race_name_id"])
+                        if entry.get("race_name_id") in race_ids
+                        else 0
+                    )
 
                     edit_horse_idx = st.selectbox(
                         "Horse",
@@ -1974,16 +2098,16 @@ if st.session_state.logged_in:
                     )
                     edit_program_number = st.number_input(
                         "Program Number",
-                        min_value=1,
+                        min_value=0,
                         max_value=12,
-                        value=entry.get("program_number") or 1,
+                        value=entry.get("program_number") or 0,
                         key=f"edit_program_number_{entry['id']}",
                     )
                     edit_number_of_horses = st.number_input(
                         "Number of Horses",
-                        min_value=1,
+                        min_value=0,
                         max_value=18,
-                        value=entry.get("number_of_horses") or 1,
+                        value=entry.get("number_of_horses") or 0,
                         key=f"edit_number_of_horses_{entry['id']}",
                     )
                     edit_odds = st.number_input(
@@ -2019,7 +2143,7 @@ if st.session_state.logged_in:
                         key=f"edit_horse_number_{entry['id']}",
                     )
                     edit_horse_weight = st.number_input(
-                        "Horse Weight (馬体重 kg)",
+                        "Horse Weight (kg)",
                         min_value=0.0,
                         max_value=999.9,
                         value=float(entry.get("horse_weight") or 0.0),
@@ -2036,45 +2160,53 @@ if st.session_state.logged_in:
                             key=f"edit_check_{entry['id']}_{c['id']}",
                         )
 
-                    if st.button("Update", key=f"update_btn_{entry['id']}"):
-                        new_horse_id = horse_ids[edit_horse_idx]
-                        new_jockey_id = jockey_ids[edit_jockey_idx]
-                        new_trainer_id = trainer_ids[edit_trainer_idx]
-                        new_venue_id = venue_ids[edit_venue_idx]
-                        new_race_id = race_ids[edit_race_idx]
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("Update", key=f"update_btn_{entry['id']}"):
+                            new_horse_id = horse_ids[edit_horse_idx]
+                            new_jockey_id = jockey_ids[edit_jockey_idx]
+                            new_trainer_id = trainer_ids[edit_trainer_idx]
+                            new_venue_id = venue_ids[edit_venue_idx]
+                            new_race_id = race_ids[edit_race_idx]
 
-                        odds_val = edit_odds if edit_odds > 0 else None
-                        prize_val = edit_prize if edit_prize > 0 else None
-                        bracket_val = edit_bracket_number if edit_bracket_number > 0 else None
-                        horse_no_val = edit_horse_number if edit_horse_number > 0 else None
-                        horse_weight_val = edit_horse_weight if edit_horse_weight > 0 else None
+                            odds_val = edit_odds if edit_odds > 0 else None
+                            prize_val = edit_prize if edit_prize > 0 else None
+                            bracket_val = edit_bracket_number if edit_bracket_number > 0 else None
+                            horse_no_val = edit_horse_number if edit_horse_number > 0 else None
+                            horse_weight_val = edit_horse_weight if edit_horse_weight > 0 else None
 
-                        success, msg = update_checklist(
-                            entry["id"],
-                            st.session_state.user_id,
-                            new_horse_id,
-                            new_jockey_id,
-                            new_trainer_id,
-                            new_venue_id,
-                            new_race_id,
-                            edit_distance if edit_distance > 0 else None,
-                            edit_date.isoformat(),
-                            edit_memo.strip(),
-                            edit_finished_place.strip(),
-                            edit_program_number,
-                            edit_number_of_horses,
-                            odds_val,
-                            prize_val,
-                            edit_checklist_data if any(edit_checklist_data.values()) else None,
-                            bracket_val,
-                            horse_no_val,
-                            horse_weight_val,
-                        )
-                        if success:
-                            st.success(msg)
+                            success, msg = update_checklist(
+                                entry["id"],
+                                st.session_state.user_id,
+                                new_horse_id,
+                                new_jockey_id,
+                                new_trainer_id,
+                                new_venue_id,
+                                new_race_id,
+                                edit_distance if edit_distance > 0 else None,
+                                edit_date.isoformat(),
+                                edit_memo.strip(),
+                                edit_finished_place.strip(),
+                                edit_program_number if edit_program_number > 0 else None,
+                                edit_number_of_horses if edit_number_of_horses > 0 else None,
+                                odds_val,
+                                prize_val,
+                                edit_checklist_data if any(edit_checklist_data.values()) else None,
+                                bracket_val,
+                                horse_no_val,
+                                horse_weight_val,
+                            )
+                            if success:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+                    with col_b:
+                        if st.button("Delete", key=f"delete_btn_{entry['id']}"):
+                            delete_checklist(entry["id"], st.session_state.user_id)
+                            st.success("Checklist deleted.")
                             st.rerun()
-                        else:
-                            st.error(msg)
 
             st.markdown("---")
             col1, col2, col3, col4 = st.columns([1.3, 1.1, 1.1, 5])
