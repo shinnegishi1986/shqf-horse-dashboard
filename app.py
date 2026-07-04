@@ -25,6 +25,7 @@ def init_db():
         previous_jockey_id INTEGER,
         trainer_id INTEGER,
         stallion_id INTEGER,
+        broodmare_sire_id INTEGER,
         venue_id INTEGER,
         race_name_id INTEGER,
         distance INTEGER,
@@ -45,6 +46,7 @@ def init_db():
         FOREIGN KEY(previous_jockey_id) REFERENCES jockeys(id),
         FOREIGN KEY(trainer_id) REFERENCES trainers(id),
         FOREIGN KEY(stallion_id) REFERENCES stallions(id),
+        FOREIGN KEY(broodmare_sire_id) REFERENCES stallions(id),
         FOREIGN KEY(venue_id) REFERENCES venues(id),
         FOREIGN KEY(race_name_id) REFERENCES race_names(id)
     );
@@ -61,6 +63,8 @@ def init_db():
         cursor.execute("ALTER TABLE checklists ADD COLUMN trainer_id INTEGER")
     if "stallion_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN stallion_id INTEGER")
+    if "broodmare_sire_id" not in columns:
+        cursor.execute("ALTER TABLE checklists ADD COLUMN broodmare_sire_id INTEGER")
     if "venue_id" not in columns:
         cursor.execute("ALTER TABLE checklists ADD COLUMN venue_id INTEGER")
     if "distance" not in columns:
@@ -216,6 +220,7 @@ def checklist_to_export_rows(checklists):
                 "previous_jockey_name": entry.get("previous_jockey_name", ""),
                 "trainer_name": entry.get("trainer_name", ""),
                 "stallion_name": entry.get("stallion_name", ""),
+                "broodmare_sire_name": entry.get("broodmare_sire_name", ""),
                 "venue_name": entry.get("venue_name", ""),
                 "race_name": entry.get("race_name", ""),
                 "distance": entry.get("distance"),
@@ -247,6 +252,7 @@ def build_csv_download_bytes(filtered_checklists, encoding="utf-8-sig"):
                 "previous_jockey_name",
                 "trainer_name",
                 "stallion_name",
+                "broodmare_sire_name",
                 "venue_name",
                 "race_name",
                 "distance",
@@ -792,6 +798,7 @@ def add_checklist(
     previous_jockey_id,
     trainer_id,
     stallion_id,
+    broodmare_sire_id,
     venue_id,
     race_name_id,
     distance,
@@ -825,12 +832,12 @@ def add_checklist(
         cursor.execute(
             """
             INSERT INTO checklists (
-                owner_id, horse_id, jockey_id, previous_jockey_id, trainer_id, stallion_id, venue_id, race_name_id,
+                owner_id, horse_id, jockey_id, previous_jockey_id, trainer_id, stallion_id, broodmare_sire_id, venue_id, race_name_id,
                 distance, date_of_race, memo, finished_place, checklist,
                 program_number, number_of_horses, odds, prize,
                 bracket_number, horse_number, horse_weight
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 owner_id,
@@ -839,6 +846,7 @@ def add_checklist(
                 previous_jockey_id,
                 trainer_id,
                 stallion_id,
+                broodmare_sire_id,
                 venue_id,
                 race_name_id,
                 distance,
@@ -872,6 +880,7 @@ def update_checklist(
     previous_jockey_id,
     trainer_id,
     stallion_id,
+    broodmare_sire_id,
     venue_id,
     race_name_id,
     distance,
@@ -904,7 +913,7 @@ def update_checklist(
     cursor.execute(
         """
         UPDATE checklists
-        SET horse_id=?, jockey_id=?, previous_jockey_id=?, trainer_id=?, stallion_id=?, venue_id=?, race_name_id=?,
+        SET horse_id=?, jockey_id=?, previous_jockey_id=?, trainer_id=?, stallion_id=?, broodmare_sire_id=?, venue_id=?, race_name_id=?,
             distance=?, date_of_race=?, memo=?, finished_place=?, checklist=?,
             program_number=?, number_of_horses=?, odds=?, prize=?,
             bracket_number=?, horse_number=?, horse_weight=?
@@ -916,6 +925,7 @@ def update_checklist(
             previous_jockey_id,
             trainer_id,
             stallion_id,
+            broodmare_sire_id,
             venue_id,
             race_name_id,
             distance,
@@ -963,6 +973,7 @@ def get_user_checklists(owner_id):
             prev_jockey.id AS previous_jockey_id, prev_jockey.jockey_name AS previous_jockey_name,
             trainers.id AS trainer_id, trainers.trainer_name,
             stallions.id AS stallion_id, stallions.stallion_name,
+            bms.id AS broodmare_sire_id, bms.stallion_name AS broodmare_sire_name,
             venues.id AS venue_id, venues.venue_name,
             race_names.id AS race_name_id, race_names.race_name,
             checklists.distance, checklists.date_of_race,
@@ -977,6 +988,7 @@ def get_user_checklists(owner_id):
         LEFT JOIN jockeys AS prev_jockey ON checklists.previous_jockey_id = prev_jockey.id
         LEFT JOIN trainers ON checklists.trainer_id = trainers.id
         LEFT JOIN stallions ON checklists.stallion_id = stallions.id
+        LEFT JOIN stallions AS bms ON checklists.broodmare_sire_id = bms.id
         LEFT JOIN venues ON checklists.venue_id = venues.id
         LEFT JOIN race_names ON checklists.race_name_id = race_names.id
         WHERE checklists.owner_id = ?
@@ -1003,6 +1015,8 @@ def get_user_checklists(owner_id):
                 "trainer_name": row["trainer_name"] if row["trainer_name"] else "No trainer selected",
                 "stallion_id": row["stallion_id"],
                 "stallion_name": row["stallion_name"] if row["stallion_name"] else "No stallion selected",
+                "broodmare_sire_id": row["broodmare_sire_id"],
+                "broodmare_sire_name": row["broodmare_sire_name"] if row["broodmare_sire_name"] else "No broodmare sire selected",
                 "venue_id": row["venue_id"],
                 "venue_name": row["venue_name"] if row["venue_name"] else "No venue selected",
                 "race_name_id": row["race_name_id"],
@@ -1416,6 +1430,9 @@ if st.session_state.logged_in:
         stallion_options = ["(No stallion selected)"] + [s["stallion_name"] for s in stallions]
         stallion_ids = [None] + [s["id"] for s in stallions]
 
+        broodmare_sire_options = ["(No broodmare sire selected)"] + [s["stallion_name"] for s in stallions]
+        broodmare_sire_ids = [None] + [s["id"] for s in stallions]
+
         venue_options = ["(No venue selected)"] + [v["venue_name"] for v in venues]
         venue_ids = [None] + [v["id"] for v in venues]
 
@@ -1451,6 +1468,12 @@ if st.session_state.logged_in:
             range(len(stallion_options)),
             format_func=lambda x: stallion_options[x],
             key="race_stallion_select",
+        )
+        selected_broodmare_sire_idx = st.selectbox(
+            "Select Broodmare Sire (optional)",
+            range(len(broodmare_sire_options)),
+            format_func=lambda x: broodmare_sire_options[x],
+            key="race_broodmare_sire_select",
         )
         selected_venue_idx = st.selectbox(
             "Select Venue (optional)",
@@ -1550,6 +1573,7 @@ if st.session_state.logged_in:
             previous_jockey_id = previous_jockey_ids[selected_previous_jockey_idx]
             trainer_id = trainer_ids[selected_trainer_idx]
             stallion_id = stallion_ids[selected_stallion_idx]
+            broodmare_sire_id = broodmare_sire_ids[selected_broodmare_sire_idx]
             venue_id = venue_ids[selected_venue_idx]
             race_name_id = race_ids[selected_race_idx]
 
@@ -1566,6 +1590,7 @@ if st.session_state.logged_in:
                 previous_jockey_id,
                 trainer_id,
                 stallion_id,
+                broodmare_sire_id,
                 venue_id,
                 race_name_id,
                 distance if distance > 0 else None,
@@ -1596,6 +1621,7 @@ if st.session_state.logged_in:
                 "previous_jockey": ["", ""],
                 "trainer": ["", ""],
                 "stallion": ["", ""],
+                "broodmare_sire": ["", ""],
                 "venue": ["", ""],
                 "race_name": ["Demo Race", "G1 Spring Stakes"],
                 "distance": [1600, 1800],
@@ -1610,6 +1636,7 @@ if st.session_state.logged_in:
                 "previous_jockey",
                 "trainer",
                 "stallion",
+                "broodmare_sire",
                 "venue",
                 "race_name",
                 "distance",
@@ -1630,7 +1657,7 @@ if st.session_state.logged_in:
         )
 
         uploaded_file = st.file_uploader(
-            "Upload CSV or XLSX file with columns: horse, jockey, previous_jockey, trainer, stallion, venue, race_name, distance, date_of_race, memo (date: YYYY-MM-DD or YYYY/MM/DD)",
+            "Upload CSV or XLSX file with columns: horse, jockey, previous_jockey, trainer, stallion, broodmare_sire, venue, race_name, distance, date_of_race, memo (date: YYYY-MM-DD or YYYY/MM/DD)",
             type=["csv", "xlsx"],
             key="batch_checklist_file",
         )
@@ -1676,6 +1703,7 @@ if st.session_state.logged_in:
                     "previous_jockey",
                     "trainer",
                     "stallion",
+                    "broodmare_sire",
                     "venue",
                     "race_name",
                     "distance",
@@ -1743,6 +1771,7 @@ if st.session_state.logged_in:
                         previous_jockey_id = get_id_or_none(get_user_jockeys, "jockey_name", row["previous_jockey"])
                         trainer_id = get_id_or_none(get_user_trainers, "trainer_name", row["trainer"])
                         stallion_id = get_or_add_stallion(row["stallion"])
+                        broodmare_sire_id = get_or_add_stallion(row["broodmare_sire"])
                         venue_id = get_id_or_none(get_user_venues, "venue_name", row["venue"])
                         race_name_id = get_or_add_race_name(row["race_name"])
 
@@ -1761,6 +1790,7 @@ if st.session_state.logged_in:
                             previous_jockey_id,
                             trainer_id,
                             stallion_id,
+                            broodmare_sire_id,
                             venue_id,
                             race_name_id,
                             dist_val,
@@ -1818,6 +1848,9 @@ if st.session_state.logged_in:
         stallion_options = ["(No stallion selected)"] + [s["stallion_name"] for s in stallions]
         stallion_ids = [None] + [s["id"] for s in stallions]
 
+        broodmare_sire_options = ["(No broodmare sire selected)"] + [s["stallion_name"] for s in stallions]
+        broodmare_sire_ids = [None] + [s["id"] for s in stallions]
+
         venue_options = ["(No venue selected)"] + [v["venue_name"] for v in venues]
         venue_ids = [None] + [v["id"] for v in venues]
 
@@ -1856,6 +1889,12 @@ if st.session_state.logged_in:
                     range(len(stallion_options)),
                     format_func=lambda x: stallion_options[x],
                     key="filter_stallion",
+                )
+                filter_broodmare_sire_idx = st.selectbox(
+                    "Filter by Broodmare Sire",
+                    range(len(broodmare_sire_options)),
+                    format_func=lambda x: broodmare_sire_options[x],
+                    key="filter_broodmare_sire",
                 )
                 filter_venue_idx = st.selectbox(
                     "Filter by Venue",
@@ -2032,6 +2071,8 @@ if st.session_state.logged_in:
                 continue
             if filter_stallion_idx != 0 and entry["stallion_id"] != stallion_ids[filter_stallion_idx]:
                 continue
+            if filter_broodmare_sire_idx != 0 and entry["broodmare_sire_id"] != broodmare_sire_ids[filter_broodmare_sire_idx]:
+                continue
             if filter_venue_idx != 0 and entry["venue_id"] != venue_ids[filter_venue_idx]:
                 continue
             if filter_race_idx != 0 and entry.get("race_name_id") != race_ids[filter_race_idx]:
@@ -2073,6 +2114,7 @@ if st.session_state.logged_in:
                 previous_jockey_text = (entry["previous_jockey_name"] or "").lower()
                 trainer_text = (entry["trainer_name"] or "").lower()
                 stallion_text = (entry["stallion_name"] or "").lower()
+                broodmare_sire_text = (entry["broodmare_sire_name"] or "").lower()
                 venue_text = (entry["venue_name"] or "").lower()
                 race_text = (entry["race_name"] or "").lower()
                 keyword = filter_memo_keyword.strip().lower()
@@ -2084,6 +2126,7 @@ if st.session_state.logged_in:
                     previous_jockey_text,
                     trainer_text,
                     stallion_text,
+                    broodmare_sire_text,
                     venue_text,
                     race_text,
                 ])
@@ -2245,6 +2288,7 @@ if st.session_state.logged_in:
                     f"Previous Jockey: {entry['previous_jockey_name']} | "
                     f"Trainer: {entry['trainer_name']} | "
                     f"Stallion: {entry['stallion_name']} | "
+                    f"Broodmare Sire: {entry['broodmare_sire_name']} | "
                     f"Venue: {entry['venue_name']} | "
                     f"Race Name: {entry.get('race_name', '(No race name selected)')} | "
                     f"Distance: {entry['distance']}m | "
@@ -2280,6 +2324,11 @@ if st.session_state.logged_in:
                     stallion_idx = (
                         stallion_ids.index(entry["stallion_id"])
                         if entry["stallion_id"] in stallion_ids
+                        else 0
+                    )
+                    broodmare_sire_idx = (
+                        broodmare_sire_ids.index(entry["broodmare_sire_id"])
+                        if entry["broodmare_sire_id"] in broodmare_sire_ids
                         else 0
                     )
                     venue_idx = (
@@ -2327,6 +2376,13 @@ if st.session_state.logged_in:
                         index=stallion_idx,
                         format_func=lambda x: stallion_options[x],
                         key=f"edit_stallion_{entry['id']}",
+                    )
+                    edit_broodmare_sire_idx = st.selectbox(
+                        "Broodmare Sire",
+                        range(len(broodmare_sire_options)),
+                        index=broodmare_sire_idx,
+                        format_func=lambda x: broodmare_sire_options[x],
+                        key=f"edit_broodmare_sire_{entry['id']}",
                     )
                     edit_venue_idx = st.selectbox(
                         "Venue",
@@ -2443,6 +2499,7 @@ if st.session_state.logged_in:
                             new_previous_jockey_id = previous_jockey_ids[edit_previous_jockey_idx]
                             new_trainer_id = trainer_ids[edit_trainer_idx]
                             new_stallion_id = stallion_ids[edit_stallion_idx]
+                            new_broodmare_sire_id = broodmare_sire_ids[edit_broodmare_sire_idx]
                             new_venue_id = venue_ids[edit_venue_idx]
                             new_race_id = race_ids[edit_race_idx]
 
@@ -2460,6 +2517,7 @@ if st.session_state.logged_in:
                                 new_previous_jockey_id,
                                 new_trainer_id,
                                 new_stallion_id,
+                                new_broodmare_sire_id,
                                 new_venue_id,
                                 new_race_id,
                                 edit_distance if edit_distance > 0 else None,
