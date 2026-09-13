@@ -31,7 +31,6 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Create referenced tables first.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,7 +165,18 @@ def init_db():
         )
     """)
 
-    # Safe migrations for databases created by older app versions.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS saved_filters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            filter_data TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_id, title),
+            FOREIGN KEY(owner_id) REFERENCES users(id)
+        )
+    """)
+
     cursor.execute("PRAGMA table_info(checklists)")
     existing_columns = {row["name"] for row in cursor.fetchall()}
 
@@ -207,6 +217,11 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_checklists_owner_date
         ON checklists (owner_id, date_of_race DESC)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_saved_filters_owner
+        ON saved_filters (owner_id, created_at DESC)
     """)
 
     conn.commit()
@@ -312,6 +327,171 @@ def get_selected_id(options_ids, selected_index):
     if selected_index < 0 or selected_index >= len(options_ids):
         return None
     return options_ids[selected_index]
+
+
+def saved_filter_key(owner_id, key_name):
+    return f"saved_filter_{owner_id}_{key_name}"
+
+
+def filter_selectbox_key(owner_id, field_name):
+    return saved_filter_key(owner_id, f"select_{field_name}")
+
+
+def filter_load_version_key(owner_id):
+    return saved_filter_key(owner_id, "load_version")
+
+
+def filter_widget_load_version_key(owner_id, field_name):
+    return saved_filter_key(owner_id, f"widget_version_{field_name}")
+
+
+def initialize_filter_defaults(owner_id):
+    defaults = {
+        "horse_id": None,
+        "jockey_id": None,
+        "previous_jockey_id": None,
+        "trainer_id": None,
+        "breeding_farm_id": None,
+        "stallion_id": None,
+        "broodmare_sire_id": None,
+        "venue_id": None,
+        "race_name_id": None,
+        "memo_keyword": "",
+        "program_number": 0,
+        "number_of_horses": 0,
+        "odds_from": 0.0,
+        "odds_to": 999.9,
+        "prize_from": 0.0,
+        "prize_to": 1000000000.0,
+        "criteria": [],
+        "criteria_mode": "AND",
+        "distance_from": 0,
+        "distance_to": 5000,
+        "date_from": None,
+        "date_to": None,
+        "places": [],
+        "enable_bracket_filter": False,
+        "bracket_from": 1,
+        "bracket_to": 8,
+        "enable_horse_filter": False,
+        "horse_from": 1,
+        "horse_to": 18,
+        "enable_weight_filter": False,
+        "weight_from": 0.0,
+        "weight_to": 999.9,
+        "new_title": "",
+        "active_filter_title": "",
+        "load_version": 0,
+    }
+
+    for key_name, default_value in defaults.items():
+        state_key = saved_filter_key(owner_id, key_name)
+
+        if state_key not in st.session_state:
+            st.session_state[state_key] = default_value
+
+
+def reset_filter_values(owner_id):
+    defaults = {
+        "horse_id": None,
+        "jockey_id": None,
+        "previous_jockey_id": None,
+        "trainer_id": None,
+        "breeding_farm_id": None,
+        "stallion_id": None,
+        "broodmare_sire_id": None,
+        "venue_id": None,
+        "race_name_id": None,
+        "memo_keyword": "",
+        "program_number": 0,
+        "number_of_horses": 0,
+        "odds_from": 0.0,
+        "odds_to": 999.9,
+        "prize_from": 0.0,
+        "prize_to": 1000000000.0,
+        "criteria": [],
+        "criteria_mode": "AND",
+        "distance_from": 0,
+        "distance_to": 5000,
+        "date_from": None,
+        "date_to": None,
+        "places": [],
+        "enable_bracket_filter": False,
+        "bracket_from": 1,
+        "bracket_to": 8,
+        "enable_horse_filter": False,
+        "horse_from": 1,
+        "horse_to": 18,
+        "enable_weight_filter": False,
+        "weight_from": 0.0,
+        "weight_to": 999.9,
+        "active_filter_title": "",
+    }
+
+    selectbox_fields = [
+        "horse_id",
+        "jockey_id",
+        "previous_jockey_id",
+        "trainer_id",
+        "breeding_farm_id",
+        "stallion_id",
+        "broodmare_sire_id",
+        "venue_id",
+        "race_name_id",
+    ]
+
+    for key_name, default_value in defaults.items():
+        st.session_state[saved_filter_key(owner_id, key_name)] = default_value
+
+    for field_name in selectbox_fields:
+        st.session_state[filter_selectbox_key(owner_id, field_name)] = None
+        st.session_state[filter_widget_load_version_key(owner_id, field_name)] = (
+            st.session_state[filter_load_version_key(owner_id)]
+        )
+
+
+def render_filter_selectbox(
+    label,
+    owner_id,
+    field_name,
+    option_ids,
+    option_labels,
+):
+    widget_key = filter_selectbox_key(owner_id, field_name)
+    filter_state_key = saved_filter_key(owner_id, field_name)
+    load_version = st.session_state[filter_load_version_key(owner_id)]
+    widget_version_key = filter_widget_load_version_key(owner_id, field_name)
+
+    # Only synchronize the dropdown when a saved filter was loaded or
+    # when Clear All Filters was pressed. During normal reruns, the
+    # Streamlit dropdown value is preserved exactly as selected by the user.
+    if st.session_state.get(widget_version_key) != load_version:
+        loaded_value = st.session_state.get(filter_state_key)
+
+        st.session_state[widget_key] = (
+            loaded_value if loaded_value in option_ids else None
+        )
+        st.session_state[widget_version_key] = load_version
+
+    if widget_key not in st.session_state:
+        initial_value = st.session_state.get(filter_state_key)
+        st.session_state[widget_key] = (
+            initial_value if initial_value in option_ids else None
+        )
+        st.session_state[widget_version_key] = load_version
+
+    selected_id = st.selectbox(
+        label,
+        option_ids,
+        format_func=lambda selected_option_id: option_labels[
+            option_ids.index(selected_option_id)
+        ],
+        key=widget_key,
+    )
+
+    st.session_state[filter_state_key] = selected_id
+
+    return selected_id
 
 
 def checklist_to_export_rows(checklists):
@@ -480,6 +660,208 @@ def add_invitation_code(code):
         return False
     finally:
         conn.close()
+
+
+# -------------------------------------------------
+# Saved filter database functions
+# -------------------------------------------------
+def get_saved_filters(owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT id, title, filter_data, created_at
+            FROM saved_filters
+            WHERE owner_id = ?
+            ORDER BY title COLLATE NOCASE, id DESC
+            """,
+            (owner_id,),
+        )
+
+        saved_filters = []
+
+        for row in cursor.fetchall():
+            saved_filters.append(
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "filter_data": safe_json_loads(row["filter_data"]),
+                    "created_at": row["created_at"],
+                }
+            )
+
+        return saved_filters
+
+    finally:
+        conn.close()
+
+
+def save_filter(owner_id, title, filter_data):
+    title = clean_text(title)
+
+    if not title:
+        return False, "Please enter a title for the saved filter."
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            """
+            INSERT INTO saved_filters (owner_id, title, filter_data)
+            VALUES (?, ?, ?)
+            """,
+            (
+                owner_id,
+                title,
+                json.dumps(filter_data, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        return True, "Filter saved!"
+
+    except sqlite3.IntegrityError:
+        return False, "A saved filter with this title already exists."
+
+    except sqlite3.Error as error:
+        conn.rollback()
+        return False, f"Database error: {error}"
+
+    finally:
+        conn.close()
+
+
+def delete_saved_filter(saved_filter_id, owner_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            """
+            DELETE FROM saved_filters
+            WHERE id = ? AND owner_id = ?
+            """,
+            (saved_filter_id, owner_id),
+        )
+        conn.commit()
+
+        if cursor.rowcount == 0:
+            return False, "Saved filter was not found."
+
+        return True, "Saved filter deleted!"
+
+    except sqlite3.Error as error:
+        conn.rollback()
+        return False, f"Database error: {error}"
+
+    finally:
+        conn.close()
+
+
+def collect_current_filter_data(owner_id):
+    def get_value(key, default=None):
+        return st.session_state.get(saved_filter_key(owner_id, key), default)
+
+    date_from = get_value("date_from")
+    date_to = get_value("date_to")
+
+    return {
+        "horse_id": get_value("horse_id", None),
+        "jockey_id": get_value("jockey_id", None),
+        "previous_jockey_id": get_value("previous_jockey_id", None),
+        "trainer_id": get_value("trainer_id", None),
+        "breeding_farm_id": get_value("breeding_farm_id", None),
+        "stallion_id": get_value("stallion_id", None),
+        "broodmare_sire_id": get_value("broodmare_sire_id", None),
+        "venue_id": get_value("venue_id", None),
+        "race_name_id": get_value("race_name_id", None),
+        "memo_keyword": get_value("memo_keyword", ""),
+        "program_number": get_value("program_number", 0),
+        "number_of_horses": get_value("number_of_horses", 0),
+        "odds_from": get_value("odds_from", 0.0),
+        "odds_to": get_value("odds_to", 999.9),
+        "prize_from": get_value("prize_from", 0.0),
+        "prize_to": get_value("prize_to", 1000000000.0),
+        "criteria_filters": get_value("criteria", []),
+        "criteria_mode": get_value("criteria_mode", "AND"),
+        "distance_from": get_value("distance_from", 0),
+        "distance_to": get_value("distance_to", 5000),
+        "date_from": date_from.isoformat() if isinstance(date_from, date) else None,
+        "date_to": date_to.isoformat() if isinstance(date_to, date) else None,
+        "finished_places": get_value("places", []),
+        "enable_bracket_filter": get_value("enable_bracket_filter", False),
+        "bracket_from": get_value("bracket_from", 1),
+        "bracket_to": get_value("bracket_to", 8),
+        "enable_horse_filter": get_value("enable_horse_filter", False),
+        "horse_from": get_value("horse_from", 1),
+        "horse_to": get_value("horse_to", 18),
+        "enable_weight_filter": get_value("enable_weight_filter", False),
+        "weight_from": get_value("weight_from", 0.0),
+        "weight_to": get_value("weight_to", 999.9),
+    }
+
+
+def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
+    reset_filter_values(owner_id)
+
+    def set_value(key, value):
+        st.session_state[saved_filter_key(owner_id, key)] = value
+
+    date_from = parse_race_date(filter_data.get("date_from"))
+    date_to = parse_race_date(filter_data.get("date_to"))
+
+    set_value("horse_id", filter_data.get("horse_id"))
+    set_value("jockey_id", filter_data.get("jockey_id"))
+    set_value("previous_jockey_id", filter_data.get("previous_jockey_id"))
+    set_value("trainer_id", filter_data.get("trainer_id"))
+    set_value("breeding_farm_id", filter_data.get("breeding_farm_id"))
+    set_value("stallion_id", filter_data.get("stallion_id"))
+    set_value("broodmare_sire_id", filter_data.get("broodmare_sire_id"))
+    set_value("venue_id", filter_data.get("venue_id"))
+    set_value("race_name_id", filter_data.get("race_name_id"))
+    set_value("memo_keyword", filter_data.get("memo_keyword", ""))
+    set_value("program_number", int(filter_data.get("program_number", 0) or 0))
+    set_value(
+        "number_of_horses",
+        int(filter_data.get("number_of_horses", 0) or 0),
+    )
+    set_value("odds_from", float(filter_data.get("odds_from", 0.0) or 0.0))
+    set_value("odds_to", float(filter_data.get("odds_to", 999.9) or 999.9))
+    set_value("prize_from", float(filter_data.get("prize_from", 0.0) or 0.0))
+    set_value(
+        "prize_to",
+        float(filter_data.get("prize_to", 1000000000.0) or 1000000000.0),
+    )
+    set_value("criteria", filter_data.get("criteria_filters", []) or [])
+    set_value("criteria_mode", filter_data.get("criteria_mode", "AND"))
+    set_value("distance_from", int(filter_data.get("distance_from", 0) or 0))
+    set_value("distance_to", int(filter_data.get("distance_to", 5000) or 5000))
+    set_value("date_from", date_from)
+    set_value("date_to", date_to)
+    set_value("places", filter_data.get("finished_places", []) or [])
+    set_value(
+        "enable_bracket_filter",
+        bool(filter_data.get("enable_bracket_filter", False)),
+    )
+    set_value("bracket_from", int(filter_data.get("bracket_from", 1) or 1))
+    set_value("bracket_to", int(filter_data.get("bracket_to", 8) or 8))
+    set_value(
+        "enable_horse_filter",
+        bool(filter_data.get("enable_horse_filter", False)),
+    )
+    set_value("horse_from", int(filter_data.get("horse_from", 1) or 1))
+    set_value("horse_to", int(filter_data.get("horse_to", 18) or 18))
+    set_value(
+        "enable_weight_filter",
+        bool(filter_data.get("enable_weight_filter", False)),
+    )
+    set_value("weight_from", float(filter_data.get("weight_from", 0.0) or 0.0))
+    set_value("weight_to", float(filter_data.get("weight_to", 999.9) or 999.9))
+    set_value("active_filter_title", clean_text(filter_title))
+
+    st.session_state[filter_load_version_key(owner_id)] += 1
 
 
 # -------------------------------------------------
@@ -1199,15 +1581,51 @@ def render_race_checklist_page():
     race_options, race_ids = make_options(race_names, "race_name")
 
     with st.form("race_checklist_form", clear_on_submit=True):
-        selected_horse_idx = st.selectbox("Select Horse (optional)", range(len(horse_options)), format_func=lambda i: horse_options[i])
-        selected_jockey_idx = st.selectbox("Select Jockey (optional)", range(len(jockey_options)), format_func=lambda i: jockey_options[i])
-        selected_previous_jockey_idx = st.selectbox("Select Previous Jockey (optional)", range(len(jockey_options)), format_func=lambda i: jockey_options[i])
-        selected_trainer_idx = st.selectbox("Select Trainer (optional)", range(len(trainer_options)), format_func=lambda i: trainer_options[i])
-        selected_breeding_farm_idx = st.selectbox("Select Breeding Farm (optional)", range(len(breeding_farm_options)), format_func=lambda i: breeding_farm_options[i])
-        selected_stallion_idx = st.selectbox("Select Stallion (optional)", range(len(stallion_options)), format_func=lambda i: stallion_options[i])
-        selected_broodmare_sire_idx = st.selectbox("Select Broodmare Sire (optional)", range(len(stallion_options)), format_func=lambda i: stallion_options[i])
-        selected_venue_idx = st.selectbox("Select Venue (optional)", range(len(venue_options)), format_func=lambda i: venue_options[i])
-        selected_race_idx = st.selectbox("Select Race Name (optional)", range(len(race_options)), format_func=lambda i: race_options[i])
+        selected_horse_idx = st.selectbox(
+            "Select Horse (optional)",
+            range(len(horse_options)),
+            format_func=lambda i: horse_options[i],
+        )
+        selected_jockey_idx = st.selectbox(
+            "Select Jockey (optional)",
+            range(len(jockey_options)),
+            format_func=lambda i: jockey_options[i],
+        )
+        selected_previous_jockey_idx = st.selectbox(
+            "Select Previous Jockey (optional)",
+            range(len(jockey_options)),
+            format_func=lambda i: jockey_options[i],
+        )
+        selected_trainer_idx = st.selectbox(
+            "Select Trainer (optional)",
+            range(len(trainer_options)),
+            format_func=lambda i: trainer_options[i],
+        )
+        selected_breeding_farm_idx = st.selectbox(
+            "Select Breeding Farm (optional)",
+            range(len(breeding_farm_options)),
+            format_func=lambda i: breeding_farm_options[i],
+        )
+        selected_stallion_idx = st.selectbox(
+            "Select Stallion (optional)",
+            range(len(stallion_options)),
+            format_func=lambda i: stallion_options[i],
+        )
+        selected_broodmare_sire_idx = st.selectbox(
+            "Select Broodmare Sire (optional)",
+            range(len(stallion_options)),
+            format_func=lambda i: stallion_options[i],
+        )
+        selected_venue_idx = st.selectbox(
+            "Select Venue (optional)",
+            range(len(venue_options)),
+            format_func=lambda i: venue_options[i],
+        )
+        selected_race_idx = st.selectbox(
+            "Select Race Name (optional)",
+            range(len(race_options)),
+            format_func=lambda i: race_options[i],
+        )
 
         distance = st.number_input(
             "Distance (meters)",
@@ -1690,7 +2108,9 @@ def build_summary_dataframe(checklists):
                 "Distance": entry.get("distance") or "",
                 "Place": entry.get("finished_place") or "",
                 "Odds": entry.get("odds") if entry.get("odds") is not None else "",
-                "Prize": entry.get("prize") if entry.get("prize") is not None else "",
+                "Prize": (
+                    entry.get("prize") if entry.get("prize") is not None else ""
+                ),
                 "Criteria": " | ".join(checked_criteria),
             }
         )
@@ -1757,7 +2177,18 @@ def calculate_review_metrics(filtered_checklists):
     }
 
 
-def render_checklist_editor(entry, owner_id, horses, jockeys, trainers, breeding_farms, stallions, venues, race_names, criteria):
+def render_checklist_editor(
+    entry,
+    owner_id,
+    horses,
+    jockeys,
+    trainers,
+    breeding_farms,
+    stallions,
+    venues,
+    race_names,
+    criteria,
+):
     st.subheader(f"Edit Checklist #{entry['id']}")
 
     horse_options, horse_ids = make_options(horses, "horse_name")
@@ -2011,6 +2442,8 @@ def render_checklist_editor(entry, owner_id, horses, jockeys, trainers, breeding
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
 
+    initialize_filter_defaults(owner_id)
+
     st.header("Checklist Review")
 
     checklists = get_user_checklists(owner_id)
@@ -2034,273 +2467,417 @@ def render_checklist_review_page():
     venue_options, venue_ids = make_options(venues, "venue_name")
     race_options, race_ids = make_options(race_names, "race_name")
 
+    if st.session_state.pop(
+        saved_filter_key(owner_id, "clear_title_on_next_run"),
+        False,
+    ):
+        st.session_state[saved_filter_key(owner_id, "new_title")] = ""
+
+    saved_filter_message = st.session_state.pop(
+        saved_filter_key(owner_id, "save_message"),
+        None,
+    )
+
+    st.subheader("Saved Filters")
+
+    if saved_filter_message:
+        st.success(saved_filter_message)
+
+    saved_filters = get_saved_filters(owner_id)
+
+    with st.expander("💾 Load or Delete Saved Filters", expanded=False):
+        if saved_filters:
+            saved_filter_lookup = {
+                saved_filter["id"]: saved_filter
+                for saved_filter in saved_filters
+            }
+            saved_filter_ids = list(saved_filter_lookup.keys())
+
+            saved_filter_col1, saved_filter_col2 = st.columns([3, 1])
+
+            with saved_filter_col1:
+                selected_saved_filter_id = st.selectbox(
+                    "Select a saved filter",
+                    saved_filter_ids,
+                    format_func=lambda filter_id: (
+                        saved_filter_lookup[filter_id]["title"]
+                        + " — saved "
+                        + saved_filter_lookup[filter_id]["created_at"]
+                    ),
+                    key=saved_filter_key(owner_id, "selected_id"),
+                )
+
+            with saved_filter_col2:
+                st.write("")
+                st.write("")
+
+                if st.button(
+                    "Load Saved Filter",
+                    key=saved_filter_key(owner_id, "load_button"),
+                    use_container_width=True,
+                ):
+                    selected_saved_filter = saved_filter_lookup[
+                        selected_saved_filter_id
+                    ]
+
+                    apply_saved_filter_to_session(
+                        owner_id,
+                        selected_saved_filter["filter_data"],
+                        selected_saved_filter["title"],
+                    )
+
+                    st.session_state.pop(
+                        "selected_review_checklist_id",
+                        None,
+                    )
+                    st.rerun()
+
+            delete_filter_col1, delete_filter_col2 = st.columns([3, 1])
+
+            with delete_filter_col1:
+                st.caption(
+                    "Load a filter, then change any conditions in Search and Filter Checklists."
+                )
+
+            with delete_filter_col2:
+                if st.button(
+                    "Delete Saved Filter",
+                    key=saved_filter_key(owner_id, "delete_button"),
+                    type="secondary",
+                    use_container_width=True,
+                ):
+                    success, message = delete_saved_filter(
+                        selected_saved_filter_id,
+                        owner_id,
+                    )
+
+                    if success:
+                        st.success(message)
+                        st.rerun()
+                    else:
+                        st.error(message)
+
+        else:
+            st.info("No saved filters yet.")
+
     with st.expander("🔍 Search and Filter Checklists", expanded=True):
+        reset_col1, reset_col2 = st.columns([3, 1])
+
+        with reset_col1:
+            active_filter_title = clean_text(
+                st.session_state.get(
+                    saved_filter_key(owner_id, "active_filter_title"),
+                    "",
+                )
+            )
+
+            if active_filter_title:
+                st.caption(
+                    f"Loaded saved filter: {active_filter_title}. "
+                    "The fields below contain its conditions and can be changed."
+                )
+            else:
+                st.caption(
+                    "Set filter conditions below. Changes are applied immediately."
+                )
+
+        with reset_col2:
+            if st.button(
+                "Clear All Filters",
+                key=saved_filter_key(owner_id, "reset_button"),
+                type="secondary",
+                use_container_width=True,
+            ):
+                reset_filter_values(owner_id)
+                st.session_state[filter_load_version_key(owner_id)] += 1
+                st.session_state.pop("selected_review_checklist_id", None)
+                st.rerun()
+
         left_col, right_col = st.columns(2)
 
         with left_col:
-            filter_horse_idx = st.selectbox(
+            selected_horse_id = render_filter_selectbox(
                 "Filter by Horse",
-                range(len(horse_options)),
-                format_func=lambda i: horse_options[i],
-                key="filter_horse",
+                owner_id,
+                "horse_id",
+                horse_ids,
+                horse_options,
             )
 
-            filter_jockey_idx = st.selectbox(
+            selected_jockey_id = render_filter_selectbox(
                 "Filter by Jockey",
-                range(len(jockey_options)),
-                format_func=lambda i: jockey_options[i],
-                key="filter_jockey",
+                owner_id,
+                "jockey_id",
+                jockey_ids,
+                jockey_options,
             )
 
-            filter_previous_jockey_idx = st.selectbox(
+            selected_previous_jockey_id = render_filter_selectbox(
                 "Filter by Previous Jockey",
-                range(len(jockey_options)),
-                format_func=lambda i: jockey_options[i],
-                key="filter_previous_jockey",
+                owner_id,
+                "previous_jockey_id",
+                jockey_ids,
+                jockey_options,
             )
 
-            filter_trainer_idx = st.selectbox(
+            selected_trainer_id = render_filter_selectbox(
                 "Filter by Trainer",
-                range(len(trainer_options)),
-                format_func=lambda i: trainer_options[i],
-                key="filter_trainer",
+                owner_id,
+                "trainer_id",
+                trainer_ids,
+                trainer_options,
             )
 
-            filter_breeding_farm_idx = st.selectbox(
+            selected_breeding_farm_id = render_filter_selectbox(
                 "Filter by Breeding Farm",
-                range(len(breeding_farm_options)),
-                format_func=lambda i: breeding_farm_options[i],
-                key="filter_breeding_farm",
+                owner_id,
+                "breeding_farm_id",
+                breeding_farm_ids,
+                breeding_farm_options,
             )
 
-            filter_stallion_idx = st.selectbox(
+            selected_stallion_id = render_filter_selectbox(
                 "Filter by Stallion",
-                range(len(stallion_options)),
-                format_func=lambda i: stallion_options[i],
-                key="filter_stallion",
+                owner_id,
+                "stallion_id",
+                stallion_ids,
+                stallion_options,
             )
 
-            filter_broodmare_sire_idx = st.selectbox(
+            selected_broodmare_sire_id = render_filter_selectbox(
                 "Filter by Broodmare Sire",
-                range(len(stallion_options)),
-                format_func=lambda i: stallion_options[i],
-                key="filter_broodmare_sire",
+                owner_id,
+                "broodmare_sire_id",
+                stallion_ids,
+                stallion_options,
             )
 
-            filter_venue_idx = st.selectbox(
+            selected_venue_id = render_filter_selectbox(
                 "Filter by Venue",
-                range(len(venue_options)),
-                format_func=lambda i: venue_options[i],
-                key="filter_venue",
+                owner_id,
+                "venue_id",
+                venue_ids,
+                venue_options,
             )
 
-            filter_race_idx = st.selectbox(
+            selected_race_name_id = render_filter_selectbox(
                 "Filter by Race Name",
-                range(len(race_options)),
-                format_func=lambda i: race_options[i],
-                key="filter_race",
+                owner_id,
+                "race_name_id",
+                race_ids,
+                race_options,
             )
 
             filter_memo_keyword = st.text_input(
                 "Memo or text contains keyword",
-                key="filter_memo_keyword",
+                key=saved_filter_key(owner_id, "memo_keyword"),
             )
 
             filter_program_number = st.number_input(
                 "Filter by Program Number",
                 min_value=0,
                 max_value=12,
-                value=0,
+                step=1,
                 help="0 = all",
-                key="filter_program_number",
+                key=saved_filter_key(owner_id, "program_number"),
             )
 
             filter_number_of_horses = st.number_input(
                 "Filter by Number of Horses",
                 min_value=0,
                 max_value=18,
-                value=0,
+                step=1,
                 help="0 = all",
-                key="filter_number_of_horses",
+                key=saved_filter_key(owner_id, "number_of_horses"),
             )
 
             filter_odds_from = st.number_input(
                 "From Odds",
                 min_value=0.0,
                 max_value=999.9,
-                value=0.0,
                 step=0.1,
-                key="filter_odds_from",
+                key=saved_filter_key(owner_id, "odds_from"),
             )
 
             filter_odds_to = st.number_input(
                 "To Odds",
                 min_value=0.0,
                 max_value=999.9,
-                value=999.9,
                 step=0.1,
-                key="filter_odds_to",
+                key=saved_filter_key(owner_id, "odds_to"),
             )
 
             filter_prize_from = st.number_input(
                 "From Prize",
                 min_value=0.0,
                 max_value=1000000000.0,
-                value=0.0,
                 step=1000.0,
-                key="filter_prize_from",
+                key=saved_filter_key(owner_id, "prize_from"),
             )
 
             filter_prize_to = st.number_input(
                 "To Prize",
                 min_value=0.0,
                 max_value=1000000000.0,
-                value=1000000000.0,
                 step=1000.0,
-                key="filter_prize_to",
+                key=saved_filter_key(owner_id, "prize_to"),
             )
 
         with right_col:
             filter_criteria = st.multiselect(
                 "Filter by Criteria",
                 [criterion["criteria_name"] for criterion in criteria],
-                key="filter_criteria",
+                key=saved_filter_key(owner_id, "criteria"),
             )
 
             criteria_mode = st.radio(
                 "Criteria match mode",
                 ["AND", "OR", "NOT matched by criteria"],
                 horizontal=True,
-                key="criteria_mode",
+                key=saved_filter_key(owner_id, "criteria_mode"),
             )
 
             filter_distance_from = st.number_input(
                 "From Distance (meters)",
                 min_value=0,
                 max_value=5000,
-                value=0,
                 step=100,
-                key="filter_distance_from",
+                key=saved_filter_key(owner_id, "distance_from"),
             )
 
             filter_distance_to = st.number_input(
                 "To Distance (meters)",
                 min_value=0,
                 max_value=5000,
-                value=5000,
                 step=100,
-                key="filter_distance_to",
+                key=saved_filter_key(owner_id, "distance_to"),
             )
 
             filter_date_from = st.date_input(
                 "From Date",
-                value=None,
-                key="filter_date_from",
+                key=saved_filter_key(owner_id, "date_from"),
             )
 
             filter_date_to = st.date_input(
                 "To Date",
-                value=None,
-                key="filter_date_to",
+                key=saved_filter_key(owner_id, "date_to"),
             )
 
             filter_places = st.multiselect(
                 "Filter by Finished Place (着順)",
                 [str(i) for i in range(1, 19)],
                 help="Example: Select 1, 2, 3 for top-three results.",
-                key="filter_places",
+                key=saved_filter_key(owner_id, "places"),
             )
 
             enable_bracket_filter = st.checkbox(
                 "Enable Bracket Number filter",
-                value=False,
-                key="enable_bracket_filter",
+                key=saved_filter_key(owner_id, "enable_bracket_filter"),
             )
 
             filter_bracket_from = st.number_input(
                 "From Bracket Number (枠番)",
                 min_value=1,
                 max_value=8,
-                value=1,
-                key="filter_bracket_from",
+                step=1,
+                key=saved_filter_key(owner_id, "bracket_from"),
             )
 
             filter_bracket_to = st.number_input(
                 "To Bracket Number (枠番)",
                 min_value=1,
                 max_value=8,
-                value=8,
-                key="filter_bracket_to",
+                step=1,
+                key=saved_filter_key(owner_id, "bracket_to"),
             )
 
             enable_horse_filter = st.checkbox(
                 "Enable Horse Number filter",
-                value=False,
-                key="enable_horse_filter",
+                key=saved_filter_key(owner_id, "enable_horse_filter"),
             )
 
             filter_horse_from = st.number_input(
                 "From Horse Number (馬番)",
                 min_value=1,
                 max_value=18,
-                value=1,
-                key="filter_horse_from",
+                step=1,
+                key=saved_filter_key(owner_id, "horse_from"),
             )
 
             filter_horse_to = st.number_input(
                 "To Horse Number (馬番)",
                 min_value=1,
                 max_value=18,
-                value=18,
-                key="filter_horse_to",
+                step=1,
+                key=saved_filter_key(owner_id, "horse_to"),
             )
 
             enable_weight_filter = st.checkbox(
                 "Enable Horse Weight filter",
-                value=False,
-                key="enable_weight_filter",
+                key=saved_filter_key(owner_id, "enable_weight_filter"),
             )
 
             filter_weight_from = st.number_input(
                 "From Horse Weight (kg)",
                 min_value=0.0,
                 max_value=999.9,
-                value=0.0,
                 step=0.1,
-                key="filter_weight_from",
+                key=saved_filter_key(owner_id, "weight_from"),
             )
 
             filter_weight_to = st.number_input(
                 "To Horse Weight (kg)",
                 min_value=0.0,
                 max_value=999.9,
-                value=999.9,
                 step=0.1,
-                key="filter_weight_to",
+                key=saved_filter_key(owner_id, "weight_to"),
             )
 
+        filter_save_col1, filter_save_col2 = st.columns([3, 1])
+
+        with filter_save_col1:
+            saved_filter_title = st.text_input(
+                "Save current filter with title",
+                placeholder="Example: Tokyo 1600m Top 3",
+                key=saved_filter_key(owner_id, "new_title"),
+            )
+
+        with filter_save_col2:
+            st.write("")
+            st.write("")
+
+            if st.button(
+                "Save Current Filter",
+                key=saved_filter_key(owner_id, "save_button"),
+                use_container_width=True,
+            ):
+                success, message = save_filter(
+                    owner_id,
+                    saved_filter_title,
+                    collect_current_filter_data(owner_id),
+                )
+
+                if success:
+                    st.session_state[saved_filter_key(owner_id, "save_message")] = (
+                        message
+                    )
+                    st.session_state[
+                        saved_filter_key(owner_id, "clear_title_on_next_run")
+                    ] = True
+                    st.rerun()
+                else:
+                    st.error(message)
+
     selected_filters = {
-        "horse_id": get_selected_id(horse_ids, filter_horse_idx),
-        "jockey_id": get_selected_id(jockey_ids, filter_jockey_idx),
-        "previous_jockey_id": get_selected_id(
-            jockey_ids,
-            filter_previous_jockey_idx,
-        ),
-        "trainer_id": get_selected_id(trainer_ids, filter_trainer_idx),
-        "breeding_farm_id": get_selected_id(
-            breeding_farm_ids,
-            filter_breeding_farm_idx,
-        ),
-        "stallion_id": get_selected_id(
-            stallion_ids,
-            filter_stallion_idx,
-        ),
-        "broodmare_sire_id": get_selected_id(
-            stallion_ids,
-            filter_broodmare_sire_idx,
-        ),
-        "venue_id": get_selected_id(venue_ids, filter_venue_idx),
-        "race_name_id": get_selected_id(race_ids, filter_race_idx),
+        "horse_id": selected_horse_id,
+        "jockey_id": selected_jockey_id,
+        "previous_jockey_id": selected_previous_jockey_id,
+        "trainer_id": selected_trainer_id,
+        "breeding_farm_id": selected_breeding_farm_id,
+        "stallion_id": selected_stallion_id,
+        "broodmare_sire_id": selected_broodmare_sire_id,
+        "venue_id": selected_venue_id,
+        "race_name_id": selected_race_name_id,
     }
 
     filtered_checklists = filter_checklists(
@@ -2442,9 +3019,6 @@ def render_checklist_review_page():
     st.markdown("---")
     st.subheader("Select One Checklist to Edit")
 
-    # THIS IS THE MAIN STABILITY FIX:
-    # Only one detailed editor is rendered, regardless of page size.
-    # The old code rendered full forms for every checklist on the current page.
     checklist_lookup = {entry["id"]: entry for entry in paged_checklists}
 
     def format_checklist_choice(checklist_id):
