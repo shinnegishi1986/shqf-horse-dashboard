@@ -838,6 +838,138 @@ def delete_saved_filter(saved_filter_id, owner_id):
         conn.close()
 
 
+def build_saved_filters_backup_bytes(owner_id):
+    saved_filters = get_saved_filters(owner_id)
+
+    backup_data = {
+        "backup_type": "horse_checklist_saved_filters",
+        "backup_version": 1,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "filters": [
+            {
+                "title": saved_filter["title"],
+                "filter_data": saved_filter["filter_data"],
+                "created_at": saved_filter["created_at"],
+            }
+            for saved_filter in saved_filters
+        ],
+    }
+
+    return json.dumps(
+        backup_data,
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+
+
+def import_saved_filters_backup(owner_id, uploaded_file):
+    try:
+        file_content = uploaded_file.getvalue().decode("utf-8-sig")
+        backup_data = json.loads(file_content)
+    except UnicodeDecodeError:
+        return False, "The backup file must be UTF-8 encoded JSON.", 0, 0
+    except json.JSONDecodeError:
+        return False, "Invalid backup file. Please upload a JSON filter backup.", 0, 0
+
+    if not isinstance(backup_data, dict):
+        return False, "Invalid backup file format.", 0, 0
+
+    if backup_data.get("backup_type") != "horse_checklist_saved_filters":
+        return False, "This file is not a saved filters backup.", 0, 0
+
+    filters = backup_data.get("filters")
+
+    if not isinstance(filters, list):
+        return False, "Invalid backup file: filters list is missing.", 0, 0
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    imported_count = 0
+    skipped_count = 0
+
+    try:
+        for item in filters:
+            if not isinstance(item, dict):
+                skipped_count += 1
+                continue
+
+            title = clean_text(item.get("title"))
+            filter_data = item.get("filter_data")
+
+            if not title or not isinstance(filter_data, dict):
+                skipped_count += 1
+                continue
+
+            cursor.execute(
+                """
+                SELECT id
+                FROM saved_filters
+                WHERE owner_id = ? AND title = ?
+                """,
+                (owner_id, title),
+            )
+
+            if cursor.fetchone():
+                skipped_count += 1
+                continue
+
+            created_at = clean_text(item.get("created_at"))
+
+            if created_at:
+                cursor.execute(
+                    """
+                    INSERT INTO saved_filters (
+                        owner_id,
+                        title,
+                        filter_data,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        owner_id,
+                        title,
+                        json.dumps(filter_data, ensure_ascii=False),
+                        created_at,
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO saved_filters (
+                        owner_id,
+                        title,
+                        filter_data
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    (
+                        owner_id,
+                        title,
+                        json.dumps(filter_data, ensure_ascii=False),
+                    ),
+                )
+
+            imported_count += 1
+
+        conn.commit()
+
+        return (
+            True,
+            "Saved filters import completed.",
+            imported_count,
+            skipped_count,
+        )
+
+    except sqlite3.Error as error:
+        conn.rollback()
+        return False, f"Database error: {error}", imported_count, skipped_count
+
+    finally:
+        conn.close()
+
+
 def collect_current_filter_data(owner_id):
     def get_value(key, default=None):
         return st.session_state.get(saved_filter_key(owner_id, key), default)
@@ -2922,12 +3054,84 @@ def render_checklist_review_page():
         None,
     )
 
+    filter_import_message = st.session_state.pop(
+        saved_filter_key(owner_id, "import_message"),
+        None,
+    )
+
     st.subheader("Saved Filters")
 
     if saved_filter_message:
         st.success(saved_filter_message)
 
+    if filter_import_message:
+        st.success(filter_import_message)
+
     saved_filters = get_saved_filters(owner_id)
+
+    with st.expander("💾 Backup or Restore Saved Filters", expanded=False):
+        st.caption(
+            "Download a JSON backup before deployment. After a deployment "
+            "or local storage reset, upload the same JSON file to restore "
+            "your saved filters."
+        )
+
+        backup_col1, backup_col2 = st.columns(2)
+
+        with backup_col1:
+            st.download_button(
+                label="📥 Export Saved Filters Backup",
+                data=build_saved_filters_backup_bytes(owner_id),
+                file_name=(
+                    "horse_checklist_saved_filters_"
+                    + datetime.now().strftime("%Y%m%d_%H%M%S")
+                    + ".json"
+                ),
+                mime="application/json",
+                use_container_width=True,
+            )
+
+        with backup_col2:
+            st.caption(
+                f"{len(saved_filters)} saved filter(s) will be included "
+                "in the backup."
+            )
+
+        st.markdown("---")
+        st.write("Restore Saved Filters")
+
+        uploaded_filter_backup = st.file_uploader(
+            "Upload saved filters backup JSON",
+            type=["json"],
+            key=saved_filter_key(owner_id, "backup_import_file"),
+        )
+
+        if st.button(
+            "Import Saved Filters Backup",
+            key=saved_filter_key(owner_id, "backup_import_button"),
+            use_container_width=True,
+        ):
+            if uploaded_filter_backup is None:
+                st.error("Please select a JSON backup file first.")
+            else:
+                success, message, imported_count, skipped_count = (
+                    import_saved_filters_backup(
+                        owner_id,
+                        uploaded_filter_backup,
+                    )
+                )
+
+                if success:
+                    st.session_state[
+                        saved_filter_key(owner_id, "import_message")
+                    ] = (
+                        f"{message} Imported: {imported_count}. "
+                        f"Skipped duplicates or invalid entries: "
+                        f"{skipped_count}."
+                    )
+                    st.rerun()
+                else:
+                    st.error(message)
 
     with st.expander("💾 Load or Delete Saved Filters", expanded=False):
         if saved_filters:
