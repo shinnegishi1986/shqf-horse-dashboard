@@ -329,9 +329,6 @@ def get_selected_id(options_ids, selected_index):
     return options_ids[selected_index]
 
 
-# -------------------------------------------------
-# Saved Filter / First and Second Filter Helpers
-# -------------------------------------------------
 def saved_filter_key(owner_id, key_name):
     return f"saved_filter_{owner_id}_{key_name}"
 
@@ -348,24 +345,8 @@ def filter_widget_load_version_key(owner_id, field_name):
     return saved_filter_key(owner_id, f"widget_version_{field_name}")
 
 
-def second_filter_key(owner_id, key_name):
-    return f"second_filter_{owner_id}_{key_name}"
-
-
-def second_filter_selectbox_key(owner_id, field_name):
-    return second_filter_key(owner_id, f"select_{field_name}")
-
-
-def second_filter_load_version_key(owner_id):
-    return second_filter_key(owner_id, "load_version")
-
-
-def second_filter_widget_load_version_key(owner_id, field_name):
-    return second_filter_key(owner_id, f"widget_version_{field_name}")
-
-
-def get_filter_defaults():
-    return {
+def initialize_filter_defaults(owner_id):
+    defaults = {
         "horse_id": None,
         "jockey_id": None,
         "previous_jockey_id": None,
@@ -398,18 +379,10 @@ def get_filter_defaults():
         "enable_weight_filter": False,
         "weight_from": 0.0,
         "weight_to": 999.9,
+        "new_title": "",
+        "active_filter_title": "",
+        "load_version": 0,
     }
-
-
-def initialize_filter_defaults(owner_id):
-    defaults = get_filter_defaults()
-    defaults.update(
-        {
-            "new_title": "",
-            "active_filter_title": "",
-            "load_version": 0,
-        }
-    )
 
     for key_name, default_value in defaults.items():
         state_key = saved_filter_key(owner_id, key_name)
@@ -418,25 +391,42 @@ def initialize_filter_defaults(owner_id):
             st.session_state[state_key] = default_value
 
 
-def initialize_second_filter_defaults(owner_id):
-    defaults = get_filter_defaults()
-    defaults.update(
-        {
-            "enabled": False,
-            "load_version": 0,
-        }
-    )
-
-    for key_name, default_value in defaults.items():
-        state_key = second_filter_key(owner_id, key_name)
-
-        if state_key not in st.session_state:
-            st.session_state[state_key] = default_value
-
-
 def reset_filter_values(owner_id):
-    defaults = get_filter_defaults()
-    defaults["active_filter_title"] = ""
+    defaults = {
+        "horse_id": None,
+        "jockey_id": None,
+        "previous_jockey_id": None,
+        "trainer_id": None,
+        "breeding_farm_id": None,
+        "stallion_id": None,
+        "broodmare_sire_id": None,
+        "venue_id": None,
+        "race_name_id": None,
+        "memo_keyword": "",
+        "program_number": 0,
+        "number_of_horses": 0,
+        "odds_from": 0.0,
+        "odds_to": 999.9,
+        "prize_from": 0.0,
+        "prize_to": 1000000000.0,
+        "criteria": [],
+        "criteria_mode": "AND",
+        "distance_from": 0,
+        "distance_to": 5000,
+        "date_from": None,
+        "date_to": None,
+        "places": [],
+        "enable_bracket_filter": False,
+        "bracket_from": 1,
+        "bracket_to": 8,
+        "enable_horse_filter": False,
+        "horse_from": 1,
+        "horse_to": 18,
+        "enable_weight_filter": False,
+        "weight_from": 0.0,
+        "weight_to": 999.9,
+        "active_filter_title": "",
+    }
 
     selectbox_fields = [
         "horse_id",
@@ -460,33 +450,6 @@ def reset_filter_values(owner_id):
         )
 
 
-def reset_second_filter_values(owner_id):
-    defaults = get_filter_defaults()
-
-    selectbox_fields = [
-        "horse_id",
-        "jockey_id",
-        "previous_jockey_id",
-        "trainer_id",
-        "breeding_farm_id",
-        "stallion_id",
-        "broodmare_sire_id",
-        "venue_id",
-        "race_name_id",
-    ]
-
-    for key_name, default_value in defaults.items():
-        st.session_state[second_filter_key(owner_id, key_name)] = default_value
-
-    for field_name in selectbox_fields:
-        st.session_state[
-            second_filter_selectbox_key(owner_id, field_name)
-        ] = None
-        st.session_state[
-            second_filter_widget_load_version_key(owner_id, field_name)
-        ] = st.session_state[second_filter_load_version_key(owner_id)]
-
-
 def render_filter_selectbox(
     label,
     owner_id,
@@ -499,50 +462,9 @@ def render_filter_selectbox(
     load_version = st.session_state[filter_load_version_key(owner_id)]
     widget_version_key = filter_widget_load_version_key(owner_id, field_name)
 
-    if st.session_state.get(widget_version_key) != load_version:
-        loaded_value = st.session_state.get(filter_state_key)
-
-        st.session_state[widget_key] = (
-            loaded_value if loaded_value in option_ids else None
-        )
-        st.session_state[widget_version_key] = load_version
-
-    if widget_key not in st.session_state:
-        initial_value = st.session_state.get(filter_state_key)
-        st.session_state[widget_key] = (
-            initial_value if initial_value in option_ids else None
-        )
-        st.session_state[widget_version_key] = load_version
-
-    selected_id = st.selectbox(
-        label,
-        option_ids,
-        format_func=lambda selected_option_id: option_labels[
-            option_ids.index(selected_option_id)
-        ],
-        key=widget_key,
-    )
-
-    st.session_state[filter_state_key] = selected_id
-
-    return selected_id
-
-
-def render_second_filter_selectbox(
-    label,
-    owner_id,
-    field_name,
-    option_ids,
-    option_labels,
-):
-    widget_key = second_filter_selectbox_key(owner_id, field_name)
-    filter_state_key = second_filter_key(owner_id, field_name)
-    load_version = st.session_state[second_filter_load_version_key(owner_id)]
-    widget_version_key = second_filter_widget_load_version_key(
-        owner_id,
-        field_name,
-    )
-
+    # Only synchronize the dropdown when a saved filter was loaded or
+    # when Clear All Filters was pressed. During normal reruns, the
+    # Streamlit dropdown value is preserved exactly as selected by the user.
     if st.session_state.get(widget_version_key) != load_version:
         loaded_value = st.session_state.get(filter_state_key)
 
@@ -1074,6 +996,7 @@ def delete_template_item(template_type, item_id, owner_id):
         conn.close()
 
 
+# Compatibility functions, so the rest of the app remains easy to understand.
 def get_user_horses(owner_id):
     return get_template_items("horse", owner_id)
 
@@ -2016,9 +1939,6 @@ def render_batch_import_section(owner_id):
         st.error(f"Error reading file: {error}")
 
 
-# -------------------------------------------------
-# Filter functions
-# -------------------------------------------------
 def filter_checklists(
     checklists,
     selected_filters,
@@ -2071,24 +1991,15 @@ def filter_checklists(
 
         if criteria_filters:
             if criteria_mode == "AND":
-                if not all(
-                    checklist_map.get(item, False)
-                    for item in criteria_filters
-                ):
+                if not all(checklist_map.get(item, False) for item in criteria_filters):
                     continue
 
             elif criteria_mode == "OR":
-                if not any(
-                    checklist_map.get(item, False)
-                    for item in criteria_filters
-                ):
+                if not any(checklist_map.get(item, False) for item in criteria_filters):
                     continue
 
             elif criteria_mode == "NOT matched by criteria":
-                if any(
-                    checklist_map.get(item, False)
-                    for item in criteria_filters
-                ):
+                if any(checklist_map.get(item, False) for item in criteria_filters):
                     continue
 
         distance_value = entry.get("distance")
@@ -2196,12 +2107,10 @@ def build_summary_dataframe(checklists):
                 "Venue": entry.get("venue_name") or "",
                 "Distance": entry.get("distance") or "",
                 "Place": entry.get("finished_place") or "",
-                "Odds": entry.get("odds")
-                if entry.get("odds") is not None
-                else "",
-                "Prize": entry.get("prize")
-                if entry.get("prize") is not None
-                else "",
+                "Odds": entry.get("odds") if entry.get("odds") is not None else "",
+                "Prize": (
+                    entry.get("prize") if entry.get("prize") is not None else ""
+                ),
                 "Criteria": " | ".join(checked_criteria),
             }
         )
@@ -2231,8 +2140,7 @@ def calculate_review_metrics(filtered_checklists):
     within_5 = [
         entry
         for entry in completed
-        if int(clean_text(entry.get("finished_place")))
-        in (1, 2, 3, 4, 5)
+        if int(clean_text(entry.get("finished_place"))) in (1, 2, 3, 4, 5)
     ]
 
     odds_values = [
@@ -2250,11 +2158,7 @@ def calculate_review_metrics(filtered_checklists):
     return {
         "total": len(filtered_checklists),
         "completed": len(completed),
-        "win_rate": (
-            len(first) / len(completed) * 100
-            if completed
-            else None
-        ),
+        "win_rate": (len(first) / len(completed) * 100) if completed else None,
         "top_3_rate": (
             len(within_3) / len(completed) * 100
             if completed
@@ -2273,9 +2177,6 @@ def calculate_review_metrics(filtered_checklists):
     }
 
 
-# -------------------------------------------------
-# Checklist editor
-# -------------------------------------------------
 def render_checklist_editor(
     entry,
     owner_id,
@@ -2467,9 +2368,7 @@ def render_checklist_editor(
             criterion_name = criterion["criteria_name"]
             edit_checklist_data[criterion_name] = st.checkbox(
                 criterion_name,
-                value=bool(
-                    existing_checklist_data.get(criterion_name, False)
-                ),
+                value=bool(existing_checklist_data.get(criterion_name, False)),
             )
 
         update_clicked = st.form_submit_button("Update Checklist")
@@ -2540,353 +2439,10 @@ def render_checklist_editor(
             st.error(message)
 
 
-# -------------------------------------------------
-# Second Filter UI
-# -------------------------------------------------
-def render_second_filter_section(
-    owner_id,
-    first_filtered_checklists,
-    horse_ids,
-    horse_options,
-    jockey_ids,
-    jockey_options,
-    trainer_ids,
-    trainer_options,
-    breeding_farm_ids,
-    breeding_farm_options,
-    stallion_ids,
-    stallion_options,
-    venue_ids,
-    venue_options,
-    race_ids,
-    race_options,
-    criteria,
-):
-    st.subheader("Second Filter")
-
-    st.caption(
-        "The second filter calculates dominance within the first-filter "
-        "results. It does not change the first-filter results list."
-    )
-
-    enable_second_filter = st.checkbox(
-        "Enable Second Filter",
-        key=second_filter_key(owner_id, "enabled"),
-    )
-
-    if not enable_second_filter:
-        return None, False
-
-    clear_second_col1, clear_second_col2 = st.columns([3, 1])
-
-    with clear_second_col1:
-        st.caption(
-            "All conditions below are used only to calculate second-filter "
-            "dominance within the first-filter results."
-        )
-
-    with clear_second_col2:
-        if st.button(
-            "Clear Second Filter",
-            key=second_filter_key(owner_id, "reset_button"),
-            type="secondary",
-            use_container_width=True,
-        ):
-            reset_second_filter_values(owner_id)
-            st.session_state[second_filter_load_version_key(owner_id)] += 1
-            st.rerun()
-
-    left_col, right_col = st.columns(2)
-
-    with left_col:
-        selected_horse_id = render_second_filter_selectbox(
-            "Second Filter by Horse",
-            owner_id,
-            "horse_id",
-            horse_ids,
-            horse_options,
-        )
-
-        selected_jockey_id = render_second_filter_selectbox(
-            "Second Filter by Jockey",
-            owner_id,
-            "jockey_id",
-            jockey_ids,
-            jockey_options,
-        )
-
-        selected_previous_jockey_id = render_second_filter_selectbox(
-            "Second Filter by Previous Jockey",
-            owner_id,
-            "previous_jockey_id",
-            jockey_ids,
-            jockey_options,
-        )
-
-        selected_trainer_id = render_second_filter_selectbox(
-            "Second Filter by Trainer",
-            owner_id,
-            "trainer_id",
-            trainer_ids,
-            trainer_options,
-        )
-
-        selected_breeding_farm_id = render_second_filter_selectbox(
-            "Second Filter by Breeding Farm",
-            owner_id,
-            "breeding_farm_id",
-            breeding_farm_ids,
-            breeding_farm_options,
-        )
-
-        selected_stallion_id = render_second_filter_selectbox(
-            "Second Filter by Stallion",
-            owner_id,
-            "stallion_id",
-            stallion_ids,
-            stallion_options,
-        )
-
-        selected_broodmare_sire_id = render_second_filter_selectbox(
-            "Second Filter by Broodmare Sire",
-            owner_id,
-            "broodmare_sire_id",
-            stallion_ids,
-            stallion_options,
-        )
-
-        selected_venue_id = render_second_filter_selectbox(
-            "Second Filter by Venue",
-            owner_id,
-            "venue_id",
-            venue_ids,
-            venue_options,
-        )
-
-        selected_race_name_id = render_second_filter_selectbox(
-            "Second Filter by Race Name",
-            owner_id,
-            "race_name_id",
-            race_ids,
-            race_options,
-        )
-
-        second_filter_memo_keyword = st.text_input(
-            "Second Filter memo or text contains keyword",
-            key=second_filter_key(owner_id, "memo_keyword"),
-        )
-
-        second_filter_program_number = st.number_input(
-            "Second Filter by Program Number",
-            min_value=0,
-            max_value=12,
-            step=1,
-            help="0 = all",
-            key=second_filter_key(owner_id, "program_number"),
-        )
-
-        second_filter_number_of_horses = st.number_input(
-            "Second Filter by Number of Horses",
-            min_value=0,
-            max_value=18,
-            step=1,
-            help="0 = all",
-            key=second_filter_key(owner_id, "number_of_horses"),
-        )
-
-        second_filter_odds_from = st.number_input(
-            "Second Filter From Odds",
-            min_value=0.0,
-            max_value=999.9,
-            step=0.1,
-            key=second_filter_key(owner_id, "odds_from"),
-        )
-
-        second_filter_odds_to = st.number_input(
-            "Second Filter To Odds",
-            min_value=0.0,
-            max_value=999.9,
-            step=0.1,
-            key=second_filter_key(owner_id, "odds_to"),
-        )
-
-        second_filter_prize_from = st.number_input(
-            "Second Filter From Prize",
-            min_value=0.0,
-            max_value=1000000000.0,
-            step=1000.0,
-            key=second_filter_key(owner_id, "prize_from"),
-        )
-
-        second_filter_prize_to = st.number_input(
-            "Second Filter To Prize",
-            min_value=0.0,
-            max_value=1000000000.0,
-            step=1000.0,
-            key=second_filter_key(owner_id, "prize_to"),
-        )
-
-    with right_col:
-        second_filter_criteria = st.multiselect(
-            "Second Filter by Criteria",
-            [criterion["criteria_name"] for criterion in criteria],
-            key=second_filter_key(owner_id, "criteria"),
-        )
-
-        second_criteria_mode = st.radio(
-            "Second Filter criteria match mode",
-            ["AND", "OR", "NOT matched by criteria"],
-            horizontal=True,
-            key=second_filter_key(owner_id, "criteria_mode"),
-        )
-
-        second_filter_distance_from = st.number_input(
-            "Second Filter From Distance (meters)",
-            min_value=0,
-            max_value=5000,
-            step=100,
-            key=second_filter_key(owner_id, "distance_from"),
-        )
-
-        second_filter_distance_to = st.number_input(
-            "Second Filter To Distance (meters)",
-            min_value=0,
-            max_value=5000,
-            step=100,
-            key=second_filter_key(owner_id, "distance_to"),
-        )
-
-        second_filter_date_from = st.date_input(
-            "Second Filter From Date",
-            key=second_filter_key(owner_id, "date_from"),
-        )
-
-        second_filter_date_to = st.date_input(
-            "Second Filter To Date",
-            key=second_filter_key(owner_id, "date_to"),
-        )
-
-        second_filter_places = st.multiselect(
-            "Second Filter by Finished Place (着順)",
-            [str(i) for i in range(1, 19)],
-            help="Example: Select 1, 2, 3 for top-three results.",
-            key=second_filter_key(owner_id, "places"),
-        )
-
-        second_enable_bracket_filter = st.checkbox(
-            "Enable Second Filter Bracket Number",
-            key=second_filter_key(owner_id, "enable_bracket_filter"),
-        )
-
-        second_filter_bracket_from = st.number_input(
-            "Second Filter From Bracket Number (枠番)",
-            min_value=1,
-            max_value=8,
-            step=1,
-            key=second_filter_key(owner_id, "bracket_from"),
-        )
-
-        second_filter_bracket_to = st.number_input(
-            "Second Filter To Bracket Number (枠番)",
-            min_value=1,
-            max_value=8,
-            step=1,
-            key=second_filter_key(owner_id, "bracket_to"),
-        )
-
-        second_enable_horse_filter = st.checkbox(
-            "Enable Second Filter Horse Number",
-            key=second_filter_key(owner_id, "enable_horse_filter"),
-        )
-
-        second_filter_horse_from = st.number_input(
-            "Second Filter From Horse Number (馬番)",
-            min_value=1,
-            max_value=18,
-            step=1,
-            key=second_filter_key(owner_id, "horse_from"),
-        )
-
-        second_filter_horse_to = st.number_input(
-            "Second Filter To Horse Number (馬番)",
-            min_value=1,
-            max_value=18,
-            step=1,
-            key=second_filter_key(owner_id, "horse_to"),
-        )
-
-        second_enable_weight_filter = st.checkbox(
-            "Enable Second Filter Horse Weight",
-            key=second_filter_key(owner_id, "enable_weight_filter"),
-        )
-
-        second_filter_weight_from = st.number_input(
-            "Second Filter From Horse Weight (kg)",
-            min_value=0.0,
-            max_value=999.9,
-            step=0.1,
-            key=second_filter_key(owner_id, "weight_from"),
-        )
-
-        second_filter_weight_to = st.number_input(
-            "Second Filter To Horse Weight (kg)",
-            min_value=0.0,
-            max_value=999.9,
-            step=0.1,
-            key=second_filter_key(owner_id, "weight_to"),
-        )
-
-    second_selected_filters = {
-        "horse_id": selected_horse_id,
-        "jockey_id": selected_jockey_id,
-        "previous_jockey_id": selected_previous_jockey_id,
-        "trainer_id": selected_trainer_id,
-        "breeding_farm_id": selected_breeding_farm_id,
-        "stallion_id": selected_stallion_id,
-        "broodmare_sire_id": selected_broodmare_sire_id,
-        "venue_id": selected_venue_id,
-        "race_name_id": selected_race_name_id,
-    }
-
-    second_filtered_checklists = filter_checklists(
-        checklists=first_filtered_checklists,
-        selected_filters=second_selected_filters,
-        criteria_filters=second_filter_criteria,
-        criteria_mode=second_criteria_mode,
-        distance_from=second_filter_distance_from,
-        distance_to=second_filter_distance_to,
-        date_from=second_filter_date_from,
-        date_to=second_filter_date_to,
-        memo_keyword=second_filter_memo_keyword,
-        program_number=second_filter_program_number,
-        number_of_horses=second_filter_number_of_horses,
-        finished_places=second_filter_places,
-        odds_from=second_filter_odds_from,
-        odds_to=second_filter_odds_to,
-        prize_from=second_filter_prize_from,
-        prize_to=second_filter_prize_to,
-        enable_bracket_filter=second_enable_bracket_filter,
-        bracket_from=second_filter_bracket_from,
-        bracket_to=second_filter_bracket_to,
-        enable_horse_filter=second_enable_horse_filter,
-        horse_from=second_filter_horse_from,
-        horse_to=second_filter_horse_to,
-        enable_weight_filter=second_enable_weight_filter,
-        weight_from=second_filter_weight_from,
-        weight_to=second_filter_weight_to,
-    )
-
-    return second_filtered_checklists, True
-
-
-# -------------------------------------------------
-# Checklist Review
-# -------------------------------------------------
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
 
     initialize_filter_defaults(owner_id)
-    initialize_second_filter_defaults(owner_id)
 
     st.header("Checklist Review")
 
@@ -3033,10 +2589,7 @@ def render_checklist_review_page():
                 use_container_width=True,
             ):
                 reset_filter_values(owner_id)
-                reset_second_filter_values(owner_id)
                 st.session_state[filter_load_version_key(owner_id)] += 1
-                st.session_state[second_filter_load_version_key(owner_id)] += 1
-                st.session_state[second_filter_key(owner_id, "enabled")] = False
                 st.session_state.pop("selected_review_checklist_id", None)
                 st.rerun()
 
@@ -3327,7 +2880,7 @@ def render_checklist_review_page():
         "race_name_id": selected_race_name_id,
     }
 
-    first_filtered_checklists = filter_checklists(
+    filtered_checklists = filter_checklists(
         checklists=checklists,
         selected_filters=selected_filters,
         criteria_filters=filter_criteria,
@@ -3355,80 +2908,8 @@ def render_checklist_review_page():
         weight_to=filter_weight_to,
     )
 
-    st.caption(
-        f"First filter results: {len(first_filtered_checklists)} checklist(s)"
-    )
-
-    with st.expander(
-        "🔎 Second Filter (Dominance Only — First Results Stay Visible)",
-        expanded=False,
-    ):
-        second_filtered_checklists, second_filter_enabled = (
-            render_second_filter_section(
-                owner_id=owner_id,
-                first_filtered_checklists=first_filtered_checklists,
-                horse_ids=horse_ids,
-                horse_options=horse_options,
-                jockey_ids=jockey_ids,
-                jockey_options=jockey_options,
-                trainer_ids=trainer_ids,
-                trainer_options=trainer_options,
-                breeding_farm_ids=breeding_farm_ids,
-                breeding_farm_options=breeding_farm_options,
-                stallion_ids=stallion_ids,
-                stallion_options=stallion_options,
-                venue_ids=venue_ids,
-                venue_options=venue_options,
-                race_ids=race_ids,
-                race_options=race_options,
-                criteria=criteria,
-            )
-        )
-
-    if second_filter_enabled:
-        first_filter_total = len(first_filtered_checklists)
-        second_filter_total = len(second_filtered_checklists)
-
-        dominance_percentage = (
-            second_filter_total / first_filter_total * 100
-            if first_filter_total > 0
-            else 0.0
-        )
-
-        st.subheader("Second Filter Dominance")
-
-        dominance_col1, dominance_col2, dominance_col3 = st.columns(3)
-
-        dominance_col1.metric(
-            "First Filter Results",
-            first_filter_total,
-        )
-
-        dominance_col2.metric(
-            "Second Filter Results",
-            second_filter_total,
-        )
-
-        dominance_col3.metric(
-            "Dominance in First Filter",
-            f"{dominance_percentage:.1f}%",
-        )
-
-        st.caption(
-            f"The second filter matches {second_filter_total} out of "
-            f"{first_filter_total} first-filter result(s): "
-            f"{dominance_percentage:.1f}%. "
-            "The results list below still shows all first-filter results."
-        )
-
-    # IMPORTANT:
-    # The second filter is only for the dominance calculation.
-    # All results, summary metrics, downloads, pagination, and editing below
-    # continue to use the first-filter result set.
-    filtered_checklists = first_filtered_checklists
-
     if not filtered_checklists:
-        st.info("No checklists found with the selected first-filter conditions.")
+        st.info("No checklists found with the selected filters.")
         return
 
     metrics = calculate_review_metrics(filtered_checklists)
@@ -3474,7 +2955,7 @@ def render_checklist_review_page():
         )
     )
 
-    st.subheader("Download First Filter Results")
+    st.subheader("Download Filtered Results")
 
     download_col1, download_col2 = st.columns(2)
 
@@ -3501,7 +2982,7 @@ def render_checklist_review_page():
         )
 
     st.markdown("---")
-    st.subheader("First Filter Results List")
+    st.subheader("Results List")
 
     page_size = st.selectbox(
         "Items per page",
