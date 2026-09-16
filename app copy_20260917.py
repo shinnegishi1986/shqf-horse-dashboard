@@ -373,7 +373,7 @@ def get_filter_defaults():
         "breeding_farm_id": None,
         "stallion_id": None,
         "broodmare_sire_id": None,
-        "venue_ids": [],
+        "venue_id": None,
         "race_name_id": None,
         "memo_keyword": "",
         "program_number": 0,
@@ -389,7 +389,6 @@ def get_filter_defaults():
         "date_from": None,
         "date_to": None,
         "places": [],
-        "exclude_places": [],
         "enable_bracket_filter": False,
         "bracket_from": 1,
         "bracket_to": 8,
@@ -447,6 +446,7 @@ def reset_filter_values(owner_id):
         "breeding_farm_id",
         "stallion_id",
         "broodmare_sire_id",
+        "venue_id",
         "race_name_id",
     ]
 
@@ -471,6 +471,7 @@ def reset_second_filter_values(owner_id):
         "breeding_farm_id",
         "stallion_id",
         "broodmare_sire_id",
+        "venue_id",
         "race_name_id",
     ]
 
@@ -984,7 +985,7 @@ def collect_current_filter_data(owner_id):
         "breeding_farm_id": get_value("breeding_farm_id", None),
         "stallion_id": get_value("stallion_id", None),
         "broodmare_sire_id": get_value("broodmare_sire_id", None),
-        "venue_ids": get_value("venue_ids", []),
+        "venue_id": get_value("venue_id", None),
         "race_name_id": get_value("race_name_id", None),
         "memo_keyword": get_value("memo_keyword", ""),
         "program_number": get_value("program_number", 0),
@@ -1000,7 +1001,6 @@ def collect_current_filter_data(owner_id):
         "date_from": date_from.isoformat() if isinstance(date_from, date) else None,
         "date_to": date_to.isoformat() if isinstance(date_to, date) else None,
         "finished_places": get_value("places", []),
-        "exclude_finished_places": get_value("exclude_places", []),
         "enable_bracket_filter": get_value("enable_bracket_filter", False),
         "bracket_from": get_value("bracket_from", 1),
         "bracket_to": get_value("bracket_to", 8),
@@ -1022,12 +1022,6 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
     date_from = parse_race_date(filter_data.get("date_from"))
     date_to = parse_race_date(filter_data.get("date_to"))
 
-    saved_venue_ids = filter_data.get("venue_ids")
-
-    if not isinstance(saved_venue_ids, list):
-        legacy_venue_id = filter_data.get("venue_id")
-        saved_venue_ids = [legacy_venue_id] if legacy_venue_id is not None else []
-
     set_value("horse_id", filter_data.get("horse_id"))
     set_value("jockey_id", filter_data.get("jockey_id"))
     set_value("previous_jockey_id", filter_data.get("previous_jockey_id"))
@@ -1035,7 +1029,7 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
     set_value("breeding_farm_id", filter_data.get("breeding_farm_id"))
     set_value("stallion_id", filter_data.get("stallion_id"))
     set_value("broodmare_sire_id", filter_data.get("broodmare_sire_id"))
-    set_value("venue_ids", saved_venue_ids)
+    set_value("venue_id", filter_data.get("venue_id"))
     set_value("race_name_id", filter_data.get("race_name_id"))
     set_value("memo_keyword", filter_data.get("memo_keyword", ""))
     set_value("program_number", int(filter_data.get("program_number", 0) or 0))
@@ -1057,10 +1051,6 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
     set_value("date_from", date_from)
     set_value("date_to", date_to)
     set_value("places", filter_data.get("finished_places", []) or [])
-    set_value(
-        "exclude_places",
-        filter_data.get("exclude_finished_places", []) or [],
-    )
     set_value(
         "enable_bracket_filter",
         bool(filter_data.get("enable_bracket_filter", False)),
@@ -2164,7 +2154,6 @@ def render_batch_import_section(owner_id):
 def filter_checklists(
     checklists,
     selected_filters,
-    selected_venue_ids,
     criteria_filters,
     criteria_mode,
     distance_from,
@@ -2175,7 +2164,6 @@ def filter_checklists(
     program_number,
     number_of_horses,
     finished_places,
-    exclude_finished_places,
     odds_from,
     odds_to,
     prize_from,
@@ -2201,9 +2189,6 @@ def filter_checklists(
                 break
 
         if not matches:
-            continue
-
-        if selected_venue_ids and entry.get("venue_id") not in selected_venue_ids:
             continue
 
         entry_date = parse_race_date(entry.get("date_of_race"))
@@ -2273,13 +2258,9 @@ def filter_checklists(
             if entry.get("number_of_horses") != number_of_horses:
                 continue
 
-        entry_finished_place = clean_text(entry.get("finished_place"))
-
-        if finished_places and entry_finished_place not in finished_places:
-            continue
-
-        if exclude_finished_places and entry_finished_place in exclude_finished_places:
-            continue
+        if finished_places:
+            if clean_text(entry.get("finished_place")) not in finished_places:
+                continue
 
         odds_value = entry.get("odds")
         if odds_value is None:
@@ -2806,13 +2787,12 @@ def render_second_filter_section(
             stallion_options,
         )
 
-        second_selected_venue_ids = st.multiselect(
-            "Second Filter by Venues",
-            venue_ids[1:],
-            format_func=lambda venue_id: venue_options[
-                venue_ids.index(venue_id)
-            ],
-            key=second_filter_key(owner_id, "venue_ids"),
+        selected_venue_id = render_second_filter_selectbox(
+            "Second Filter by Venue",
+            owner_id,
+            "venue_id",
+            venue_ids,
+            venue_options,
         )
 
         selected_race_name_id = render_second_filter_selectbox(
@@ -2925,13 +2905,6 @@ def render_second_filter_section(
             key=second_filter_key(owner_id, "places"),
         )
 
-        second_exclude_finished_places = st.multiselect(
-            "Second Filter Exclude Finished Place (着順)",
-            [str(i) for i in range(1, 19)],
-            help="Example: Select 1, 2, 3 to exclude first-, second-, and third-place results.",
-            key=second_filter_key(owner_id, "exclude_places"),
-        )
-
         second_enable_bracket_filter = st.checkbox(
             "Enable Second Filter Bracket Number",
             key=second_filter_key(owner_id, "enable_bracket_filter"),
@@ -3003,13 +2976,13 @@ def render_second_filter_section(
         "breeding_farm_id": selected_breeding_farm_id,
         "stallion_id": selected_stallion_id,
         "broodmare_sire_id": selected_broodmare_sire_id,
+        "venue_id": selected_venue_id,
         "race_name_id": selected_race_name_id,
     }
 
     second_filtered_checklists = filter_checklists(
         checklists=first_filtered_checklists,
         selected_filters=second_selected_filters,
-        selected_venue_ids=second_selected_venue_ids,
         criteria_filters=second_filter_criteria,
         criteria_mode=second_criteria_mode,
         distance_from=second_filter_distance_from,
@@ -3020,7 +2993,6 @@ def render_second_filter_section(
         program_number=second_filter_program_number,
         number_of_horses=second_filter_number_of_horses,
         finished_places=second_filter_places,
-        exclude_finished_places=second_exclude_finished_places,
         odds_from=second_filter_odds_from,
         odds_to=second_filter_odds_to,
         prize_from=second_filter_prize_from,
@@ -3331,14 +3303,12 @@ def render_checklist_review_page():
                 stallion_options,
             )
 
-            selected_venue_ids = st.multiselect(
-                "Filter by Venues",
-                venue_ids[1:],
-                format_func=lambda venue_id: venue_options[
-                    venue_ids.index(venue_id)
-                ],
-                help="Select multiple venues, for example 東京 and 中山.",
-                key=saved_filter_key(owner_id, "venue_ids"),
+            selected_venue_id = render_filter_selectbox(
+                "Filter by Venue",
+                owner_id,
+                "venue_id",
+                venue_ids,
+                venue_options,
             )
 
             selected_race_name_id = render_filter_selectbox(
@@ -3451,13 +3421,6 @@ def render_checklist_review_page():
                 key=saved_filter_key(owner_id, "places"),
             )
 
-            exclude_finished_places = st.multiselect(
-                "Exclude Finished Place (着順)",
-                [str(i) for i in range(1, 19)],
-                help="Example: Select 1, 2, 3 to show all results except first-, second-, and third-place horses.",
-                key=saved_filter_key(owner_id, "exclude_places"),
-            )
-
             enable_bracket_filter = st.checkbox(
                 "Enable Bracket Number filter",
                 key=saved_filter_key(owner_id, "enable_bracket_filter"),
@@ -3526,7 +3489,7 @@ def render_checklist_review_page():
         with filter_save_col1:
             saved_filter_title = st.text_input(
                 "Save current filter with title",
-                placeholder="Example: Tokyo and Nakayama excluding top 3",
+                placeholder="Example: Tokyo 1600m Top 3",
                 key=saved_filter_key(owner_id, "new_title"),
             )
 
@@ -3564,13 +3527,13 @@ def render_checklist_review_page():
         "breeding_farm_id": selected_breeding_farm_id,
         "stallion_id": selected_stallion_id,
         "broodmare_sire_id": selected_broodmare_sire_id,
+        "venue_id": selected_venue_id,
         "race_name_id": selected_race_name_id,
     }
 
     first_filtered_checklists = filter_checklists(
         checklists=checklists,
         selected_filters=selected_filters,
-        selected_venue_ids=selected_venue_ids,
         criteria_filters=filter_criteria,
         criteria_mode=criteria_mode,
         distance_from=filter_distance_from,
@@ -3581,7 +3544,6 @@ def render_checklist_review_page():
         program_number=filter_program_number,
         number_of_horses=filter_number_of_horses,
         finished_places=filter_places,
-        exclude_finished_places=exclude_finished_places,
         odds_from=filter_odds_from,
         odds_to=filter_odds_to,
         prize_from=filter_prize_from,
@@ -3663,226 +3625,324 @@ def render_checklist_review_page():
             "The results list below still shows all first-filter results."
         )
 
-    review_metrics = calculate_review_metrics(first_filtered_checklists)
+    # IMPORTANT:
+    # The second filter is only for the dominance calculation.
+    # All results, summary metrics, downloads, pagination, and editing below
+    # continue to use the first-filter result set.
+    filtered_checklists = first_filtered_checklists
 
-    st.subheader("Review Summary")
+    if not filtered_checklists:
+        st.info("No checklists found with the selected first-filter conditions.")
+        return
+
+    metrics = calculate_review_metrics(filtered_checklists)
+
+    st.subheader("Results Summary")
 
     metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
 
-    metric_col1.metric("Total Results", review_metrics["total"])
-    metric_col2.metric("Completed", review_metrics["completed"])
+    metric_col1.metric("Filtered races", metrics["total"])
+    metric_col2.metric(
+        "Completed results",
+        metrics["completed"],
+    )
     metric_col3.metric(
-        "Win Rate",
+        "Top 3 rate",
         (
-            f"{review_metrics['win_rate']:.1f}%"
-            if review_metrics["win_rate"] is not None
-            else "N/A"
+            f"{metrics['top_3_rate']:.1f}%"
+            if metrics["top_3_rate"] is not None
+            else "-"
         ),
     )
     metric_col4.metric(
-        "Top 3 Rate",
+        "Win rate",
         (
-            f"{review_metrics['top_3_rate']:.1f}%"
-            if review_metrics["top_3_rate"] is not None
-            else "N/A"
+            f"{metrics['win_rate']:.1f}%"
+            if metrics["win_rate"] is not None
+            else "-"
         ),
     )
 
-    metric_col5, metric_col6 = st.columns(2)
-
-    metric_col5.metric(
-        "Average Odds (Top 3)",
-        (
-            f"{review_metrics['average_top_3_odds']:.1f}"
-            if review_metrics["average_top_3_odds"] is not None
-            else "N/A"
-        ),
-    )
-    metric_col6.metric(
-        "Average Prize (Top 5)",
-        (
-            f"{review_metrics['average_top_5_prize']:.0f}"
-            if review_metrics["average_top_5_prize"] is not None
-            else "N/A"
-        ),
+    st.caption(
+        "Average odds among top-three finishes: "
+        + (
+            f"{metrics['average_top_3_odds']:.2f}"
+            if metrics["average_top_3_odds"] is not None
+            else "-"
+        )
+        + " | Average prize among top-five finishes: "
+        + (
+            f"{metrics['average_top_5_prize']:,.0f}"
+            if metrics["average_top_5_prize"] is not None
+            else "-"
+        )
     )
 
-    st.subheader("Filtered Checklists")
+    st.subheader("Download First Filter Results")
 
-    if first_filtered_checklists:
-        summary_df = build_summary_dataframe(first_filtered_checklists)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    download_col1, download_col2 = st.columns(2)
 
+    with download_col1:
         st.download_button(
-            label="📥 Download Filtered Results CSV",
-            data=build_csv_download_bytes(first_filtered_checklists),
-            file_name=(
-                "horse_checklist_filtered_"
-                + datetime.now().strftime("%Y%m%d_%H%M%S")
-                + ".csv"
+            label="📥 Download CSV (UTF-8 BOM)",
+            data=build_csv_download_bytes(
+                filtered_checklists,
+                encoding="utf-8-sig",
             ),
+            file_name="filtered_checklists_utf8.csv",
             mime="text/csv",
         )
 
-        checklist_lookup = {
-            entry["id"]: entry
-            for entry in first_filtered_checklists
-        }
-
-        selected_review_checklist_id = st.selectbox(
-            "Select checklist to edit",
-            list(checklist_lookup.keys()),
-            format_func=lambda checklist_id: (
-                f"#{checklist_id} | "
-                f"{checklist_lookup[checklist_id].get('date_of_race') or ''} | "
-                f"{checklist_lookup[checklist_id].get('horse_name') or ''} | "
-                f"{checklist_lookup[checklist_id].get('venue_name') or ''}"
+    with download_col2:
+        st.download_button(
+            label="📥 Download CSV (Shift-JIS)",
+            data=build_csv_download_bytes(
+                filtered_checklists,
+                encoding="shift_jis",
             ),
-            key="selected_review_checklist_id",
+            file_name="filtered_checklists_sjis.csv",
+            mime="text/csv",
         )
 
-        selected_entry = checklist_lookup.get(selected_review_checklist_id)
+    st.markdown("---")
+    st.subheader("First Filter Results List")
 
-        if selected_entry:
-            with st.expander(
-                f"Edit Checklist #{selected_entry['id']}",
-                expanded=False,
-            ):
-                render_checklist_editor(
-                    entry=selected_entry,
-                    owner_id=owner_id,
-                    horses=horses,
-                    jockeys=jockeys,
-                    trainers=trainers,
-                    breeding_farms=breeding_farms,
-                    stallions=stallions,
-                    venues=venues,
-                    race_names=race_names,
-                    criteria=criteria,
-                )
+    page_size = st.selectbox(
+        "Items per page",
+        [10, 20, 50],
+        index=1,
+        key="review_page_size",
+    )
 
-    else:
-        st.info("No checklists match the current filters.")
+    total_results = len(filtered_checklists)
+    total_pages = max(1, (total_results + page_size - 1) // page_size)
+
+    page_options = list(range(1, total_pages + 1))
+
+    selected_page = st.selectbox(
+        "Page",
+        page_options,
+        key="review_page_number",
+    )
+
+    start_index = (selected_page - 1) * page_size
+    end_index = min(start_index + page_size, total_results)
+    paged_checklists = filtered_checklists[start_index:end_index]
+
+    st.caption(
+        f"Showing {start_index + 1}-{end_index} of {total_results} checklist(s)"
+    )
+
+    st.dataframe(
+        build_summary_dataframe(paged_checklists),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.markdown("---")
+    st.subheader("Select One Checklist to Edit")
+
+    checklist_lookup = {entry["id"]: entry for entry in paged_checklists}
+
+    def format_checklist_choice(checklist_id):
+        entry = checklist_lookup[checklist_id]
+
+        return (
+            f"#{entry['id']} | {entry.get('date_of_race') or '-'} | "
+            f"{entry.get('horse_name') or '-'} | "
+            f"{entry.get('race_name') or '-'} | "
+            f"Place: {entry.get('finished_place') or '-'}"
+        )
+
+    available_ids = list(checklist_lookup.keys())
+
+    if "selected_review_checklist_id" not in st.session_state:
+        st.session_state.selected_review_checklist_id = available_ids[0]
+
+    if st.session_state.selected_review_checklist_id not in available_ids:
+        st.session_state.selected_review_checklist_id = available_ids[0]
+
+    selected_review_checklist_id = st.selectbox(
+        "Checklist",
+        available_ids,
+        format_func=format_checklist_choice,
+        key="selected_review_checklist_id",
+    )
+
+    selected_entry = checklist_lookup[selected_review_checklist_id]
+
+    render_checklist_editor(
+        entry=selected_entry,
+        owner_id=owner_id,
+        horses=horses,
+        jockeys=jockeys,
+        trainers=trainers,
+        breeding_farms=breeding_farms,
+        stallions=stallions,
+        venues=venues,
+        race_names=race_names,
+        criteria=criteria,
+    )
 
 
 # -------------------------------------------------
-# App routing
+# App
 # -------------------------------------------------
-def render_login_page():
-    st.title("Horse Checklist App")
+init_db()
 
+st.title("🐎 Horse Checklist App")
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.username = ""
+    st.session_state.display_name = ""
+    st.session_state.user_id = None
+
+if st.session_state.logged_in:
+    st.sidebar.write(f"Logged in as: {st.session_state.display_name}")
+
+    page = st.sidebar.radio(
+        "Menu",
+        [
+            "Register Horse (Template)",
+            "Register Jockey (Template)",
+            "Register Trainer (Template)",
+            "Register Breeding Farm (Template)",
+            "Register Stallion (Template)",
+            "Register Venue (Template)",
+            "Register Race Name (Template)",
+            "Register Criteria (Template)",
+            "Race Checklist",
+            "Checklist Review",
+        ],
+    )
+
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.display_name = ""
+        st.session_state.user_id = None
+        st.session_state.pop("selected_review_checklist_id", None)
+        st.rerun()
+
+    if page == "Register Horse (Template)":
+        render_template_page(
+            "horse",
+            "Register a Horse Template",
+            "Horse Name",
+        )
+
+    elif page == "Register Jockey (Template)":
+        render_template_page(
+            "jockey",
+            "Register a Jockey Template",
+            "Jockey Name",
+        )
+
+    elif page == "Register Trainer (Template)":
+        render_template_page(
+            "trainer",
+            "Register a Trainer Template",
+            "Trainer Name",
+        )
+
+    elif page == "Register Breeding Farm (Template)":
+        render_template_page(
+            "breeding_farm",
+            "Register a Breeding Farm Template",
+            "Breeding Farm Name",
+        )
+
+    elif page == "Register Stallion (Template)":
+        render_template_page(
+            "stallion",
+            "Register a Stallion Template",
+            "Stallion Name",
+        )
+
+    elif page == "Register Venue (Template)":
+        render_template_page(
+            "venue",
+            "Register a Venue (Racecourse) Template",
+            "Venue Name (e.g., Tokyo)",
+        )
+
+    elif page == "Register Race Name (Template)":
+        render_template_page(
+            "race_name",
+            "Register a Race Name Template",
+            "Race Name",
+        )
+
+    elif page == "Register Criteria (Template)":
+        render_template_page(
+            "criteria",
+            "Register Checklist Criteria Template",
+            "Criteria Name (e.g., Won Previous Race)",
+        )
+
+    elif page == "Race Checklist":
+        render_race_checklist_page()
+
+    elif page == "Checklist Review":
+        render_checklist_review_page()
+
+else:
     login_tab, register_tab = st.tabs(["Login", "Register"])
 
     with login_tab:
+        st.header("Login")
+
         with st.form("login_form"):
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
             login_clicked = st.form_submit_button("Login")
 
         if login_clicked:
-            success, display_name, user_id = login_user(username, password)
-
-            if success:
-                st.session_state.logged_in = True
-                st.session_state.display_name = display_name
-                st.session_state.user_id = user_id
-                st.rerun()
+            if not clean_text(username) or not password:
+                st.error("Please fill all fields.")
             else:
-                st.error("Invalid username or password.")
+                success, display_name, user_id = login_user(
+                    clean_text(username),
+                    password,
+                )
+
+                if success:
+                    st.session_state.logged_in = True
+                    st.session_state.username = clean_text(username)
+                    st.session_state.display_name = display_name
+                    st.session_state.user_id = user_id
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password.")
 
     with register_tab:
+        st.header("Register")
+
         with st.form("register_form", clear_on_submit=True):
-            username = st.text_input("Username", key="register_username")
+            username = st.text_input("Username")
             display_name = st.text_input("Display Name")
-            password = st.text_input("Password", type="password", key="register_password")
-            password_confirm = st.text_input(
-                "Confirm Password",
-                type="password",
-            )
+            password = st.text_input("Password", type="password")
             invitation_code = st.text_input("Invitation Code")
             register_clicked = st.form_submit_button("Register")
 
         if register_clicked:
-            username = clean_text(username)
-            display_name = clean_text(display_name)
-            invitation_code = clean_text(invitation_code)
-
-            if not username or not display_name or not password or not invitation_code:
-                st.error("Please complete all fields.")
-            elif password != password_confirm:
-                st.error("Passwords do not match.")
+            if (
+                not clean_text(username)
+                or not clean_text(display_name)
+                or not password
+                or not clean_text(invitation_code)
+            ):
+                st.error("Please fill all fields.")
             else:
                 success, message = register_user(
-                    username,
-                    display_name,
+                    clean_text(username),
+                    clean_text(display_name),
                     password,
-                    invitation_code,
+                    clean_text(invitation_code),
                 )
 
                 if success:
                     st.success(message)
                 else:
                     st.error(message)
-
-
-def main():
-    init_db()
-
-    if "logged_in" not in st.session_state:
-        st.session_state.logged_in = False
-
-    if not st.session_state.logged_in:
-        render_login_page()
-        return
-
-    st.sidebar.title("Horse Checklist App")
-    st.sidebar.write(f"Logged in as: {st.session_state.display_name}")
-
-    page = st.sidebar.radio(
-        "Menu",
-        [
-            "Race Checklist",
-            "Checklist Review",
-            "Horses",
-            "Jockeys",
-            "Trainers",
-            "Breeding Farms",
-            "Stallions",
-            "Venues",
-            "Race Names",
-            "Criteria",
-        ],
-    )
-
-    if st.sidebar.button("Logout"):
-        st.session_state.clear()
-        st.rerun()
-
-    if page == "Race Checklist":
-        render_race_checklist_page()
-    elif page == "Checklist Review":
-        render_checklist_review_page()
-    elif page == "Horses":
-        render_template_page("horse", "Horses", "Horse Name")
-    elif page == "Jockeys":
-        render_template_page("jockey", "Jockeys", "Jockey Name")
-    elif page == "Trainers":
-        render_template_page("trainer", "Trainers", "Trainer Name")
-    elif page == "Breeding Farms":
-        render_template_page(
-            "breeding_farm",
-            "Breeding Farms",
-            "Breeding Farm Name",
-        )
-    elif page == "Stallions":
-        render_template_page("stallion", "Stallions", "Stallion Name")
-    elif page == "Venues":
-        render_template_page("venue", "Venues", "Venue Name")
-    elif page == "Race Names":
-        render_template_page("race_name", "Race Names", "Race Name")
-    elif page == "Criteria":
-        render_template_page("criteria", "Criteria", "Criteria Name")
-
-
-if __name__ == "__main__":
-    main()
