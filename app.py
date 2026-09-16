@@ -722,6 +722,63 @@ def login_user(username, password):
         conn.close()
 
 
+def change_user_password(owner_id, current_password, new_password):
+    if not current_password:
+        return False, "Please enter your current password."
+
+    if not new_password:
+        return False, "Please enter a new password."
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            "SELECT password FROM users WHERE id = ?",
+            (owner_id,),
+        )
+        user = cursor.fetchone()
+
+        if not user:
+            return False, "User account was not found."
+
+        if not bcrypt.checkpw(
+            current_password.encode("utf-8"),
+            user["password"].encode("utf-8"),
+        ):
+            return False, "Your current password is incorrect."
+
+        if bcrypt.checkpw(
+            new_password.encode("utf-8"),
+            user["password"].encode("utf-8"),
+        ):
+            return False, "Your new password must be different from your current password."
+
+        new_hashed_password = bcrypt.hashpw(
+            new_password.encode("utf-8"),
+            bcrypt.gensalt(),
+        ).decode("utf-8")
+
+        cursor.execute(
+            """
+            UPDATE users
+            SET password = ?
+            WHERE id = ?
+            """,
+            (new_hashed_password, owner_id),
+        )
+
+        conn.commit()
+        return True, "Password changed successfully."
+
+    except sqlite3.Error as error:
+        conn.rollback()
+        return False, f"Password change error: {error}"
+
+    finally:
+        conn.close()
+
+
 def add_invitation_code(code):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -3766,6 +3823,56 @@ def render_checklist_review_page():
 
 
 # -------------------------------------------------
+# Account settings
+# -------------------------------------------------
+def render_account_settings_page():
+    owner_id = st.session_state.user_id
+
+    st.header("Account Settings")
+    st.subheader("Change Password")
+
+    st.caption(
+        "Enter your current password and a new password. Your password is "
+        "stored securely as a bcrypt hash."
+    )
+
+    with st.form("change_password_form", clear_on_submit=True):
+        current_password = st.text_input(
+            "Current Password",
+            type="password",
+        )
+
+        new_password = st.text_input(
+            "New Password",
+            type="password",
+        )
+
+        confirm_new_password = st.text_input(
+            "Confirm New Password",
+            type="password",
+        )
+
+        change_password_clicked = st.form_submit_button("Change Password")
+
+    if change_password_clicked:
+        if not current_password or not new_password or not confirm_new_password:
+            st.error("Please complete all password fields.")
+        elif new_password != confirm_new_password:
+            st.error("New password and confirmation do not match.")
+        else:
+            success, message = change_user_password(
+                owner_id,
+                current_password,
+                new_password,
+            )
+
+            if success:
+                st.success(message)
+            else:
+                st.error(message)
+
+
+# -------------------------------------------------
 # App routing
 # -------------------------------------------------
 def render_login_page():
@@ -3794,7 +3901,11 @@ def render_login_page():
         with st.form("register_form", clear_on_submit=True):
             username = st.text_input("Username", key="register_username")
             display_name = st.text_input("Display Name")
-            password = st.text_input("Password", type="password", key="register_password")
+            password = st.text_input(
+                "Password",
+                type="password",
+                key="register_password",
+            )
             password_confirm = st.text_input(
                 "Confirm Password",
                 type="password",
@@ -3843,6 +3954,7 @@ def main():
         [
             "Race Checklist",
             "Checklist Review",
+            "Account Settings",
             "Horses",
             "Jockeys",
             "Trainers",
@@ -3862,6 +3974,8 @@ def main():
         render_race_checklist_page()
     elif page == "Checklist Review":
         render_checklist_review_page()
+    elif page == "Account Settings":
+        render_account_settings_page()
     elif page == "Horses":
         render_template_page("horse", "Horses", "Horse Name")
     elif page == "Jockeys":
