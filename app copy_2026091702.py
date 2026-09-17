@@ -234,10 +234,6 @@ def init_db():
 def clean_text(value):
     if value is None:
         return ""
-
-    if isinstance(value, float) and pd.isna(value):
-        return ""
-
     return str(value).strip()
 
 
@@ -307,10 +303,7 @@ def normalize_date(date_val):
 
 def to_optional_int(value):
     try:
-        if value is None or pd.isna(value):
-            return None
-
-        value = int(float(value))
+        value = int(value)
         return value if value > 0 else None
     except (ValueError, TypeError):
         return None
@@ -318,49 +311,10 @@ def to_optional_int(value):
 
 def to_optional_float(value):
     try:
-        if value is None or pd.isna(value):
-            return None
-
         value = float(value)
         return value if value > 0 else None
     except (ValueError, TypeError):
         return None
-
-
-def parse_optional_int(value):
-    value = clean_text(value)
-
-    if not value:
-        return None
-
-    try:
-        return int(float(value))
-    except (ValueError, TypeError):
-        return None
-
-
-def parse_optional_float(value):
-    value = clean_text(value)
-
-    if not value:
-        return None
-
-    try:
-        return float(value)
-    except (ValueError, TypeError):
-        return None
-
-
-def parse_boolean(value):
-    if isinstance(value, bool):
-        return value
-
-    if value is None or pd.isna(value):
-        return False
-
-    normalized = clean_text(value).lower()
-
-    return normalized in {"1", "true", "t", "yes", "y", "on", "checked", "✓"}
 
 
 def make_options(items, label_key):
@@ -373,23 +327,6 @@ def get_selected_id(options_ids, selected_index):
     if selected_index < 0 or selected_index >= len(options_ids):
         return None
     return options_ids[selected_index]
-
-
-def format_yen(value):
-    if value is None:
-        return "N/A"
-
-    return f"¥{value:,.0f}"
-
-
-def get_paginated_items(items, page_number, page_size):
-    if page_size <= 0:
-        return items
-
-    start_index = (page_number - 1) * page_size
-    end_index = start_index + page_size
-
-    return items[start_index:end_index]
 
 
 # -------------------------------------------------
@@ -462,8 +399,6 @@ def get_filter_defaults():
         "enable_weight_filter": False,
         "weight_from": 0.0,
         "weight_to": 999.9,
-        "page_size": 50,
-        "page_number": 1,
     }
 
 
@@ -636,176 +571,79 @@ def render_second_filter_selectbox(
     return selected_id
 
 
-def checklist_to_export_rows(checklists, criteria_items=None):
-    criteria_names = []
-
-    if criteria_items:
-        criteria_names = [
-            criterion["criteria_name"]
-            for criterion in criteria_items
-        ]
-
+def checklist_to_export_rows(checklists):
     rows = []
 
     for entry in checklists:
-        checklist_map = entry.get("checklist") or {}
-
         checked_criteria = [
             criterion
-            for criterion, checked in checklist_map.items()
+            for criterion, checked in (entry.get("checklist") or {}).items()
             if checked
         ]
 
-        row = {
-            "id": entry.get("id"),
-            "horse_name": entry.get("horse_name", ""),
-            "jockey_name": entry.get("jockey_name", ""),
-            "previous_jockey_name": entry.get("previous_jockey_name", ""),
-            "trainer_name": entry.get("trainer_name", ""),
-            "breeding_farm_name": entry.get("breeding_farm_name", ""),
-            "stallion_name": entry.get("stallion_name", ""),
-            "broodmare_sire_name": entry.get("broodmare_sire_name", ""),
-            "venue_name": entry.get("venue_name", ""),
-            "race_name": entry.get("race_name", ""),
-            "distance": entry.get("distance"),
-            "date_of_race": entry.get("date_of_race", ""),
-            "memo": entry.get("memo", ""),
-            "finished_place": entry.get("finished_place", ""),
-            "program_number": entry.get("program_number"),
-            "number_of_horses": entry.get("number_of_horses"),
-            "odds": entry.get("odds"),
-            "prize": entry.get("prize"),
-            "bracket_number": entry.get("bracket_number"),
-            "horse_number": entry.get("horse_number"),
-            "horse_weight": entry.get("horse_weight"),
-            "checked_criteria": " | ".join(checked_criteria),
-        }
-
-        for criterion_name in criteria_names:
-            row[f"criteria__{criterion_name}"] = (
-                1 if checklist_map.get(criterion_name, False) else 0
-            )
-
-        rows.append(row)
+        rows.append(
+            {
+                "id": entry.get("id"),
+                "horse_name": entry.get("horse_name", ""),
+                "jockey_name": entry.get("jockey_name", ""),
+                "previous_jockey_name": entry.get("previous_jockey_name", ""),
+                "trainer_name": entry.get("trainer_name", ""),
+                "breeding_farm_name": entry.get("breeding_farm_name", ""),
+                "stallion_name": entry.get("stallion_name", ""),
+                "broodmare_sire_name": entry.get("broodmare_sire_name", ""),
+                "venue_name": entry.get("venue_name", ""),
+                "race_name": entry.get("race_name", ""),
+                "distance": entry.get("distance"),
+                "date_of_race": entry.get("date_of_race", ""),
+                "memo": entry.get("memo", ""),
+                "finished_place": entry.get("finished_place", ""),
+                "program_number": entry.get("program_number"),
+                "number_of_horses": entry.get("number_of_horses"),
+                "odds": entry.get("odds"),
+                "prize": entry.get("prize"),
+                "bracket_number": entry.get("bracket_number"),
+                "horse_number": entry.get("horse_number"),
+                "horse_weight": entry.get("horse_weight"),
+                "checked_criteria": " | ".join(checked_criteria),
+            }
+        )
 
     return rows
 
 
-def build_csv_download_bytes(
-    filtered_checklists,
-    criteria_items=None,
-    encoding="utf-8-sig",
-):
-    export_rows = checklist_to_export_rows(
-        filtered_checklists,
-        criteria_items,
-    )
+def build_csv_download_bytes(filtered_checklists, encoding="utf-8-sig"):
+    export_rows = checklist_to_export_rows(filtered_checklists)
     df = pd.DataFrame(export_rows)
 
     if df.empty:
-        columns = [
-            "id",
-            "horse_name",
-            "jockey_name",
-            "previous_jockey_name",
-            "trainer_name",
-            "breeding_farm_name",
-            "stallion_name",
-            "broodmare_sire_name",
-            "venue_name",
-            "race_name",
-            "distance",
-            "date_of_race",
-            "memo",
-            "finished_place",
-            "program_number",
-            "number_of_horses",
-            "odds",
-            "prize",
-            "bracket_number",
-            "horse_number",
-            "horse_weight",
-            "checked_criteria",
-        ]
-
-        if criteria_items:
-            columns.extend(
-                f"criteria__{criterion['criteria_name']}"
-                for criterion in criteria_items
-            )
-
-        df = pd.DataFrame(columns=columns)
+        df = pd.DataFrame(
+            columns=[
+                "id",
+                "horse_name",
+                "jockey_name",
+                "previous_jockey_name",
+                "trainer_name",
+                "breeding_farm_name",
+                "stallion_name",
+                "broodmare_sire_name",
+                "venue_name",
+                "race_name",
+                "distance",
+                "date_of_race",
+                "memo",
+                "finished_place",
+                "program_number",
+                "number_of_horses",
+                "odds",
+                "prize",
+                "bracket_number",
+                "horse_number",
+                "horse_weight",
+                "checked_criteria",
+            ]
+        )
 
     return df.to_csv(index=False).encode(encoding, errors="replace")
-
-
-def build_import_template_bytes(criteria_items):
-    columns = [
-        "id",
-        "horse_name",
-        "jockey_name",
-        "previous_jockey_name",
-        "trainer_name",
-        "breeding_farm_name",
-        "stallion_name",
-        "broodmare_sire_name",
-        "venue_name",
-        "race_name",
-        "distance",
-        "date_of_race",
-        "memo",
-        "finished_place",
-        "program_number",
-        "number_of_horses",
-        "odds",
-        "prize",
-        "bracket_number",
-        "horse_number",
-        "horse_weight",
-        "checked_criteria",
-    ]
-
-    criteria_columns = [
-        f"criteria__{criterion['criteria_name']}"
-        for criterion in criteria_items
-    ]
-
-    columns.extend(criteria_columns)
-
-    sample_row = {
-        "id": "",
-        "horse_name": "Sample Horse A",
-        "jockey_name": "Sample Jockey",
-        "previous_jockey_name": "",
-        "trainer_name": "Sample Trainer",
-        "breeding_farm_name": "",
-        "stallion_name": "Sample Stallion",
-        "broodmare_sire_name": "",
-        "venue_name": "東京",
-        "race_name": "Sample Race",
-        "distance": 1600,
-        "date_of_race": "2025-04-01",
-        "memo": "Sample memo",
-        "finished_place": "",
-        "program_number": 11,
-        "number_of_horses": 18,
-        "odds": 5.8,
-        "prize": 10000000,
-        "bracket_number": 3,
-        "horse_number": 5,
-        "horse_weight": 480,
-        "checked_criteria": "",
-    }
-
-    for criterion_column in criteria_columns:
-        sample_row[criterion_column] = 0
-
-    if criteria_columns:
-        sample_row[criteria_columns[0]] = 1
-
-    sample_df = pd.DataFrame([sample_row], columns=columns)
-
-    return sample_df.to_csv(index=False).encode("utf-8-sig")
 
 
 # -------------------------------------------------
@@ -1467,76 +1305,6 @@ def get_user_criteria(owner_id):
     return get_template_items("criteria", owner_id)
 
 
-def find_or_create_template_item(template_type, owner_id, value):
-    _, name_column = TEMPLATE_CONFIG[template_type]
-    value = clean_text(value)
-
-    if not value:
-        return None
-
-    items = get_template_items(template_type, owner_id)
-
-    existing = next(
-        (
-            item
-            for item in items
-            if clean_text(item[name_column]).casefold() == value.casefold()
-        ),
-        None,
-    )
-
-    if existing:
-        return existing["id"]
-
-    success, _ = add_template_item(template_type, owner_id, value)
-
-    if not success:
-        items = get_template_items(template_type, owner_id)
-        existing = next(
-            (
-                item
-                for item in items
-                if clean_text(item[name_column]).casefold() == value.casefold()
-            ),
-            None,
-        )
-        return existing["id"] if existing else None
-
-    items = get_template_items(template_type, owner_id)
-
-    created = next(
-        (
-            item
-            for item in items
-            if clean_text(item[name_column]).casefold() == value.casefold()
-        ),
-        None,
-    )
-
-    return created["id"] if created else None
-
-
-def find_template_item_id(template_type, owner_id, value):
-    _, name_column = TEMPLATE_CONFIG[template_type]
-    value = clean_text(value)
-
-    if not value:
-        return None
-
-    items = get_template_items(template_type, owner_id)
-
-    found = next(
-        (
-            item
-            for item in items
-            if clean_text(item[name_column]).casefold() == value.casefold()
-        ),
-        None,
-    )
-
-    return found["id"] if found else None
-
-
 # -------------------------------------------------
 # Checklist database functions
 # -------------------------------------------------
@@ -1800,49 +1568,6 @@ def delete_checklist(checklist_id, owner_id):
         conn.close()
 
 
-def get_checklist_by_id(checklist_id, owner_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute(
-            """
-            SELECT id
-            FROM checklists
-            WHERE id = ? AND owner_id = ?
-            """,
-            (checklist_id, owner_id),
-        )
-        row = cursor.fetchone()
-
-        return row["id"] if row else None
-    finally:
-        conn.close()
-
-
-def find_checklist_id_by_horse_and_date(owner_id, horse_id, date_of_race):
-    if horse_id is None or not date_of_race:
-        return None
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute(
-            """
-            SELECT id
-            FROM checklists
-            WHERE owner_id = ? AND horse_id = ? AND date_of_race = ?
-            """,
-            (owner_id, horse_id, date_of_race),
-        )
-        row = cursor.fetchone()
-
-        return row["id"] if row else None
-    finally:
-        conn.close()
-
-
 def get_user_checklists(owner_id):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1957,321 +1682,6 @@ def get_user_checklists(owner_id):
 
 
 # -------------------------------------------------
-# Import functions
-# -------------------------------------------------
-IMPORT_COLUMN_ALIASES = {
-    "id": ["id", "checklist_id"],
-    "horse_name": ["horse_name", "horse"],
-    "jockey_name": ["jockey_name", "jockey"],
-    "previous_jockey_name": ["previous_jockey_name", "previous_jockey"],
-    "trainer_name": ["trainer_name", "trainer"],
-    "breeding_farm_name": ["breeding_farm_name", "breeding_farm"],
-    "stallion_name": ["stallion_name", "stallion"],
-    "broodmare_sire_name": ["broodmare_sire_name", "broodmare_sire"],
-    "venue_name": ["venue_name", "venue"],
-    "race_name": ["race_name"],
-    "distance": ["distance"],
-    "date_of_race": ["date_of_race"],
-    "memo": ["memo"],
-    "finished_place": ["finished_place"],
-    "program_number": ["program_number"],
-    "number_of_horses": ["number_of_horses"],
-    "odds": ["odds"],
-    "prize": ["prize"],
-    "bracket_number": ["bracket_number"],
-    "horse_number": ["horse_number"],
-    "horse_weight": ["horse_weight"],
-    "checked_criteria": ["checked_criteria"],
-}
-
-
-def normalize_import_column_name(column_name):
-    return (
-        clean_text(column_name)
-        .lower()
-        .replace(" ", "_")
-        .replace("-", "_")
-    )
-
-
-def get_row_value(row, normalized_columns, canonical_name, default=None):
-    aliases = IMPORT_COLUMN_ALIASES.get(canonical_name, [canonical_name])
-
-    for alias in aliases:
-        if alias in normalized_columns:
-            return row[normalized_columns[alias]]
-
-    return default
-
-
-def build_import_checklist_data(row, normalized_columns, criteria_items):
-    criteria_names = {
-        criterion["criteria_name"]
-        for criterion in criteria_items
-    }
-
-    checklist_data = {}
-
-    checked_criteria_value = get_row_value(
-        row,
-        normalized_columns,
-        "checked_criteria",
-        "",
-    )
-
-    for criterion_name in clean_text(checked_criteria_value).split("|"):
-        criterion_name = clean_text(criterion_name)
-
-        if criterion_name and criterion_name in criteria_names:
-            checklist_data[criterion_name] = True
-
-    for normalized_name, original_name in normalized_columns.items():
-        if not normalized_name.startswith("criteria__"):
-            continue
-
-        criterion_name = clean_text(original_name[len("criteria__"):])
-
-        if criterion_name and criterion_name in criteria_names:
-            checklist_data[criterion_name] = parse_boolean(row[original_name])
-
-    return checklist_data if any(checklist_data.values()) else None
-
-
-def import_checklist_dataframe(owner_id, df, criteria_items):
-    normalized_columns = {
-        normalize_import_column_name(column_name): column_name
-        for column_name in df.columns
-    }
-
-    if "horse_name" not in normalized_columns and "horse" not in normalized_columns:
-        return 0, 0, 0, [
-            (
-                0,
-                "Missing required column: horse_name (or legacy column: horse).",
-            )
-        ]
-
-    if (
-        "date_of_race" not in normalized_columns
-        or "date_of_race" not in normalized_columns
-    ):
-        return 0, 0, 0, [(0, "Missing required column: date_of_race.")]
-
-    added_count = 0
-    updated_count = 0
-    failed_rows = []
-
-    for index, row in df.iterrows():
-        row_number = index + 2
-
-        try:
-            checklist_id = parse_optional_int(
-                get_row_value(row, normalized_columns, "id")
-            )
-
-            horse_name = clean_text(
-                get_row_value(row, normalized_columns, "horse_name")
-            )
-            race_date = normalize_date(
-                get_row_value(row, normalized_columns, "date_of_race")
-            )
-
-            if not horse_name:
-                failed_rows.append((row_number, "Horse name is required."))
-                continue
-
-            if not race_date:
-                failed_rows.append((row_number, "Date of race is required."))
-                continue
-
-            horse_id = find_or_create_template_item(
-                "horse",
-                owner_id,
-                horse_name,
-            )
-
-            jockey_id = find_or_create_template_item(
-                "jockey",
-                owner_id,
-                get_row_value(row, normalized_columns, "jockey_name"),
-            )
-
-            previous_jockey_id = find_or_create_template_item(
-                "jockey",
-                owner_id,
-                get_row_value(
-                    row,
-                    normalized_columns,
-                    "previous_jockey_name",
-                ),
-            )
-
-            trainer_id = find_or_create_template_item(
-                "trainer",
-                owner_id,
-                get_row_value(row, normalized_columns, "trainer_name"),
-            )
-
-            breeding_farm_id = find_or_create_template_item(
-                "breeding_farm",
-                owner_id,
-                get_row_value(
-                    row,
-                    normalized_columns,
-                    "breeding_farm_name",
-                ),
-            )
-
-            stallion_id = find_or_create_template_item(
-                "stallion",
-                owner_id,
-                get_row_value(row, normalized_columns, "stallion_name"),
-            )
-
-            broodmare_sire_id = find_or_create_template_item(
-                "stallion",
-                owner_id,
-                get_row_value(
-                    row,
-                    normalized_columns,
-                    "broodmare_sire_name",
-                ),
-            )
-
-            venue_id = find_or_create_template_item(
-                "venue",
-                owner_id,
-                get_row_value(row, normalized_columns, "venue_name"),
-            )
-
-            race_name_id = find_or_create_template_item(
-                "race_name",
-                owner_id,
-                get_row_value(row, normalized_columns, "race_name"),
-            )
-
-            distance = parse_optional_int(
-                get_row_value(row, normalized_columns, "distance")
-            )
-            memo = clean_text(
-                get_row_value(row, normalized_columns, "memo")
-            )
-            finished_place = clean_text(
-                get_row_value(row, normalized_columns, "finished_place")
-            )
-            program_number = parse_optional_int(
-                get_row_value(row, normalized_columns, "program_number")
-            )
-            number_of_horses = parse_optional_int(
-                get_row_value(row, normalized_columns, "number_of_horses")
-            )
-            odds = parse_optional_float(
-                get_row_value(row, normalized_columns, "odds")
-            )
-            prize = parse_optional_float(
-                get_row_value(row, normalized_columns, "prize")
-            )
-            bracket_number = parse_optional_int(
-                get_row_value(row, normalized_columns, "bracket_number")
-            )
-            horse_number = parse_optional_int(
-                get_row_value(row, normalized_columns, "horse_number")
-            )
-            horse_weight = parse_optional_float(
-                get_row_value(row, normalized_columns, "horse_weight")
-            )
-
-            checklist_data = build_import_checklist_data(
-                row,
-                normalized_columns,
-                criteria_items,
-            )
-
-            target_checklist_id = None
-
-            if checklist_id is not None:
-                target_checklist_id = get_checklist_by_id(
-                    checklist_id,
-                    owner_id,
-                )
-
-            if target_checklist_id is None:
-                target_checklist_id = find_checklist_id_by_horse_and_date(
-                    owner_id,
-                    horse_id,
-                    race_date,
-                )
-
-            if target_checklist_id is not None:
-                success, message = update_checklist(
-                    checklist_id=target_checklist_id,
-                    owner_id=owner_id,
-                    horse_id=horse_id,
-                    jockey_id=jockey_id,
-                    previous_jockey_id=previous_jockey_id,
-                    trainer_id=trainer_id,
-                    breeding_farm_id=breeding_farm_id,
-                    stallion_id=stallion_id,
-                    broodmare_sire_id=broodmare_sire_id,
-                    venue_id=venue_id,
-                    race_name_id=race_name_id,
-                    distance=distance,
-                    date_of_race=race_date,
-                    memo=memo,
-                    finished_place=finished_place,
-                    program_number=program_number,
-                    number_of_horses=number_of_horses,
-                    odds=odds,
-                    prize=prize,
-                    checklist_data=checklist_data,
-                    bracket_number=bracket_number,
-                    horse_number=horse_number,
-                    horse_weight=horse_weight,
-                )
-
-                if success:
-                    updated_count += 1
-                else:
-                    failed_rows.append((row_number, message))
-
-            else:
-                success, message = add_checklist(
-                    owner_id=owner_id,
-                    horse_id=horse_id,
-                    jockey_id=jockey_id,
-                    previous_jockey_id=previous_jockey_id,
-                    trainer_id=trainer_id,
-                    breeding_farm_id=breeding_farm_id,
-                    stallion_id=stallion_id,
-                    broodmare_sire_id=broodmare_sire_id,
-                    venue_id=venue_id,
-                    race_name_id=race_name_id,
-                    distance=distance,
-                    date_of_race=race_date,
-                    memo=memo,
-                    finished_place=finished_place,
-                    checklist_data=checklist_data,
-                    program_number=program_number,
-                    number_of_horses=number_of_horses,
-                    odds=odds,
-                    prize=prize,
-                    bracket_number=bracket_number,
-                    horse_number=horse_number,
-                    horse_weight=horse_weight,
-                )
-
-                if success:
-                    added_count += 1
-                else:
-                    failed_rows.append((row_number, message))
-
-        except Exception as error:
-            failed_rows.append((row_number, str(error)))
-
-    return added_count, updated_count, len(failed_rows), failed_rows
-
-
-# -------------------------------------------------
 # UI helpers
 # -------------------------------------------------
 def render_template_page(template_type, title, input_label):
@@ -2349,6 +1759,76 @@ def render_template_page(template_type, title, input_label):
                         st.rerun()
                     else:
                         st.error(message)
+
+
+def find_or_create_template_item(template_type, owner_id, value):
+    _, name_column = TEMPLATE_CONFIG[template_type]
+    value = clean_text(value)
+
+    if not value:
+        return None
+
+    items = get_template_items(template_type, owner_id)
+
+    existing = next(
+        (
+            item
+            for item in items
+            if clean_text(item[name_column]).lower() == value.lower()
+        ),
+        None,
+    )
+
+    if existing:
+        return existing["id"]
+
+    success, _ = add_template_item(template_type, owner_id, value)
+
+    if not success:
+        items = get_template_items(template_type, owner_id)
+        existing = next(
+            (
+                item
+                for item in items
+                if clean_text(item[name_column]).lower() == value.lower()
+            ),
+            None,
+        )
+        return existing["id"] if existing else None
+
+    items = get_template_items(template_type, owner_id)
+
+    created = next(
+        (
+            item
+            for item in items
+            if clean_text(item[name_column]).lower() == value.lower()
+        ),
+        None,
+    )
+
+    return created["id"] if created else None
+
+
+def find_template_item_id(template_type, owner_id, value):
+    _, name_column = TEMPLATE_CONFIG[template_type]
+    value = clean_text(value)
+
+    if not value:
+        return None
+
+    items = get_template_items(template_type, owner_id)
+
+    found = next(
+        (
+            item
+            for item in items
+            if clean_text(item[name_column]).lower() == value.lower()
+        ),
+        None,
+    )
+
+    return found["id"] if found else None
 
 
 def render_race_checklist_page():
@@ -2538,32 +2018,46 @@ def render_race_checklist_page():
         else:
             st.error(message)
 
-    render_batch_import_section(owner_id, criteria)
+    render_batch_import_section(owner_id)
 
 
-def render_batch_import_section(owner_id, criteria_items):
+def render_batch_import_section(owner_id):
     st.markdown("---")
     st.subheader("Batch Import Race Checklists (CSV or Excel)")
 
-    st.caption(
-        "Download the template or filtered-results CSV, edit it, and upload "
-        "it here. Every current checklist criterion is included as a "
-        "`criteria__...` column. Use 1 / TRUE / YES for checked criteria."
+    sample_data = pd.DataFrame(
+        {
+            "horse": ["Sample Horse A", "Sample Horse B"],
+            "jockey": ["", ""],
+            "previous_jockey": ["", ""],
+            "trainer": ["", ""],
+            "breeding_farm": ["", ""],
+            "stallion": ["", ""],
+            "broodmare_sire": ["", ""],
+            "venue": ["", ""],
+            "race_name": ["Demo Race", "G1 Spring Stakes"],
+            "distance": [1600, 1800],
+            "date_of_race": ["2025-04-01", "2025/06/07"],
+            "memo": ["First sample entry", "Second entry"],
+        }
     )
+
+    template_bytes = io.BytesIO()
+    sample_data.to_csv(template_bytes, index=False)
+    template_bytes.seek(0)
 
     st.download_button(
         label="📥 Download CSV Template",
-        data=build_import_template_bytes(criteria_items),
-        file_name="race_checklist_import_template.csv",
+        data=template_bytes,
+        file_name="race_checklist_template.csv",
         mime="text/csv",
     )
 
     uploaded_file = st.file_uploader(
         (
-            "Upload CSV or XLSX. Required columns: horse_name and "
-            "date_of_race. Optional id updates the matching checklist. "
-            "Without id, horse_name + date_of_race updates a matching record "
-            "or creates a new checklist."
+            "Upload CSV or XLSX with columns: horse, jockey, previous_jockey, "
+            "trainer, breeding_farm, stallion, broodmare_sire, venue, "
+            "race_name, distance, date_of_race, memo"
         ),
         type=["csv", "xlsx"],
         key="batch_checklist_file",
@@ -2577,22 +2071,134 @@ def render_batch_import_section(owner_id, criteria_items):
 
     try:
         if uploaded_file.name.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded_file, dtype=object)
+            df = pd.read_csv(uploaded_file)
         else:
-            df = pd.read_excel(uploaded_file, dtype=object)
+            df = pd.read_excel(uploaded_file)
 
-        added_count, updated_count, failed_count, failed_rows = (
-            import_checklist_dataframe(
-                owner_id,
-                df,
-                criteria_items,
+        df.columns = [
+            str(column).strip().lower().replace(" ", "_")
+            for column in df.columns
+        ]
+
+        required_columns = [
+            "horse",
+            "jockey",
+            "previous_jockey",
+            "trainer",
+            "breeding_farm",
+            "stallion",
+            "broodmare_sire",
+            "venue",
+            "race_name",
+            "distance",
+            "date_of_race",
+            "memo",
+        ]
+
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in df.columns
+        ]
+
+        if missing_columns:
+            st.error(
+                "Missing required columns: " + ", ".join(missing_columns)
             )
-        )
+            return
 
-        st.success(
-            f"Import completed. Added: {added_count}. "
-            f"Updated: {updated_count}. Failed: {failed_count}."
-        )
+        success_count = 0
+        failed_rows = []
+
+        for index, row in df.iterrows():
+            try:
+                horse_id = find_or_create_template_item(
+                    "horse",
+                    owner_id,
+                    row["horse"],
+                )
+                jockey_id = find_template_item_id(
+                    "jockey",
+                    owner_id,
+                    row["jockey"],
+                )
+                previous_jockey_id = find_template_item_id(
+                    "jockey",
+                    owner_id,
+                    row["previous_jockey"],
+                )
+                trainer_id = find_template_item_id(
+                    "trainer",
+                    owner_id,
+                    row["trainer"],
+                )
+                breeding_farm_id = find_template_item_id(
+                    "breeding_farm",
+                    owner_id,
+                    row["breeding_farm"],
+                )
+                stallion_id = find_or_create_template_item(
+                    "stallion",
+                    owner_id,
+                    row["stallion"],
+                )
+                broodmare_sire_id = find_or_create_template_item(
+                    "stallion",
+                    owner_id,
+                    row["broodmare_sire"],
+                )
+                venue_id = find_template_item_id(
+                    "venue",
+                    owner_id,
+                    row["venue"],
+                )
+                race_name_id = find_or_create_template_item(
+                    "race_name",
+                    owner_id,
+                    row["race_name"],
+                )
+
+                distance_value = None
+                if pd.notna(row["distance"]):
+                    try:
+                        distance_value = int(float(row["distance"]))
+                    except (ValueError, TypeError):
+                        distance_value = None
+
+                race_date = normalize_date(row["date_of_race"])
+                memo_value = (
+                    clean_text(row["memo"])
+                    if pd.notna(row["memo"])
+                    else ""
+                )
+
+                success, message = add_checklist(
+                    owner_id=owner_id,
+                    horse_id=horse_id,
+                    jockey_id=jockey_id,
+                    previous_jockey_id=previous_jockey_id,
+                    trainer_id=trainer_id,
+                    breeding_farm_id=breeding_farm_id,
+                    stallion_id=stallion_id,
+                    broodmare_sire_id=broodmare_sire_id,
+                    venue_id=venue_id,
+                    race_name_id=race_name_id,
+                    distance=distance_value,
+                    date_of_race=race_date,
+                    memo=memo_value,
+                    finished_place=None,
+                    checklist_data=None,
+                )
+
+                if success:
+                    success_count += 1
+                else:
+                    failed_rows.append((index + 2, message))
+
+            except Exception as error:
+                failed_rows.append((index + 2, str(error)))
+
+        st.success(f"Imported {success_count} checklist(s).")
 
         if failed_rows:
             failed_text = "; ".join(
@@ -2801,11 +2407,9 @@ def build_summary_dataframe(checklists):
                 "Odds": entry.get("odds")
                 if entry.get("odds") is not None
                 else "",
-                "Prize (¥)": (
-                    f"¥{entry.get('prize'):,.0f}"
-                    if entry.get("prize") is not None
-                    else ""
-                ),
+                "Prize": entry.get("prize")
+                if entry.get("prize") is not None
+                else "",
                 "Criteria": " | ".join(checked_criteria),
             }
         )
@@ -3032,7 +2636,7 @@ def render_checklist_editor(
             )
 
             edit_prize = st.number_input(
-                "Prize (¥)",
+                "Prize",
                 min_value=0.0,
                 max_value=1000000000.0,
                 value=float(entry.get("prize") or 0.0),
@@ -3316,7 +2920,7 @@ def render_second_filter_section(
         )
 
         second_filter_prize_from = st.number_input(
-            "Second Filter From Prize (¥)",
+            "Second Filter From Prize",
             min_value=0.0,
             max_value=1000000000.0,
             step=1000.0,
@@ -3324,7 +2928,7 @@ def render_second_filter_section(
         )
 
         second_filter_prize_to = st.number_input(
-            "Second Filter To Prize (¥)",
+            "Second Filter To Prize",
             min_value=0.0,
             max_value=1000000000.0,
             step=1000.0,
@@ -3842,7 +3446,7 @@ def render_checklist_review_page():
             )
 
             filter_prize_from = st.number_input(
-                "From Prize (¥)",
+                "From Prize",
                 min_value=0.0,
                 max_value=1000000000.0,
                 step=1000.0,
@@ -3850,7 +3454,7 @@ def render_checklist_review_page():
             )
 
             filter_prize_to = st.number_input(
-                "To Prize (¥)",
+                "To Prize",
                 min_value=0.0,
                 max_value=1000000000.0,
                 step=1000.0,
@@ -4116,8 +3720,6 @@ def render_checklist_review_page():
             "The results list below still shows all first-filter results."
         )
 
-    # Metrics are calculated from every first-filter result, not only the
-    # currently displayed page.
     review_metrics = calculate_review_metrics(first_filtered_checklists)
 
     st.subheader("Review Summary")
@@ -4127,18 +3729,18 @@ def render_checklist_review_page():
     metric_col1.metric("Total Results", review_metrics["total"])
     metric_col2.metric("Completed", review_metrics["completed"])
     metric_col3.metric(
-        "Top 3 Rate",
-        (
-            f"{review_metrics['top_3_rate']:.1f}%"
-            if review_metrics["top_3_rate"] is not None
-            else "N/A"
-        ),
-    )
-    metric_col4.metric(
         "Win Rate",
         (
             f"{review_metrics['win_rate']:.1f}%"
             if review_metrics["win_rate"] is not None
+            else "N/A"
+        ),
+    )
+    metric_col4.metric(
+        "Top 3 Rate",
+        (
+            f"{review_metrics['top_3_rate']:.1f}%"
+            if review_metrics["top_3_rate"] is not None
             else "N/A"
         ),
     )
@@ -4155,18 +3757,22 @@ def render_checklist_review_page():
     )
     metric_col6.metric(
         "Average Prize (Top 5)",
-        format_yen(review_metrics["average_top_5_prize"]),
+        (
+            f"{review_metrics['average_top_5_prize']:.0f}"
+            if review_metrics["average_top_5_prize"] is not None
+            else "N/A"
+        ),
     )
 
     st.subheader("Filtered Checklists")
 
     if first_filtered_checklists:
+        summary_df = build_summary_dataframe(first_filtered_checklists)
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
         st.download_button(
             label="📥 Download Filtered Results CSV",
-            data=build_csv_download_bytes(
-                first_filtered_checklists,
-                criteria,
-            ),
+            data=build_csv_download_bytes(first_filtered_checklists),
             file_name=(
                 "horse_checklist_filtered_"
                 + datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -4175,116 +3781,42 @@ def render_checklist_review_page():
             mime="text/csv",
         )
 
-        total_results = len(first_filtered_checklists)
-
-        display_col1, display_col2 = st.columns([2, 2])
-
-        with display_col1:
-            page_size_options = [25, 50, 100, 200, "Show all"]
-
-            selected_page_size = st.selectbox(
-                "Results per page",
-                page_size_options,
-                index=page_size_options.index(
-                    st.session_state.get(
-                        saved_filter_key(owner_id, "page_size"),
-                        50,
-                    )
-                    if st.session_state.get(
-                        saved_filter_key(owner_id, "page_size"),
-                        50,
-                    )
-                    in page_size_options
-                    else 50
-                ),
-                key=saved_filter_key(owner_id, "page_size_selector"),
-            )
-
-        if selected_page_size == "Show all":
-            page_size = total_results
-        else:
-            page_size = int(selected_page_size)
-
-        total_pages = max(1, (total_results + page_size - 1) // page_size)
-
-        with display_col2:
-            current_page = st.number_input(
-                "Page",
-                min_value=1,
-                max_value=total_pages,
-                value=min(
-                    int(
-                        st.session_state.get(
-                            saved_filter_key(owner_id, "page_number"),
-                            1,
-                        )
-                    ),
-                    total_pages,
-                ),
-                step=1,
-                key=saved_filter_key(owner_id, "page_number_input"),
-            )
-
-        st.session_state[saved_filter_key(owner_id, "page_size")] = (
-            selected_page_size
-        )
-        st.session_state[saved_filter_key(owner_id, "page_number")] = current_page
-
-        paginated_checklists = get_paginated_items(
-            first_filtered_checklists,
-            current_page,
-            page_size,
-        )
-
-        first_item_number = (current_page - 1) * page_size + 1
-        last_item_number = min(current_page * page_size, total_results)
-
-        st.caption(
-            f"Showing {first_item_number}-{last_item_number} of "
-            f"{total_results} filtered checklist(s). "
-            "Summary metrics above are calculated from all filtered results."
-        )
-
-        summary_df = build_summary_dataframe(paginated_checklists)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
-
         checklist_lookup = {
             entry["id"]: entry
-            for entry in paginated_checklists
+            for entry in first_filtered_checklists
         }
 
-        if checklist_lookup:
-            selected_review_checklist_id = st.selectbox(
-                "Select checklist on this page to edit",
-                list(checklist_lookup.keys()),
-                format_func=lambda checklist_id: (
-                    f"#{checklist_id} | "
-                    f"{checklist_lookup[checklist_id].get('date_of_race') or ''} | "
-                    f"{checklist_lookup[checklist_id].get('horse_name') or ''} | "
-                    f"{checklist_lookup[checklist_id].get('venue_name') or ''}"
-                ),
-                key="selected_review_checklist_id",
-            )
+        selected_review_checklist_id = st.selectbox(
+            "Select checklist to edit",
+            list(checklist_lookup.keys()),
+            format_func=lambda checklist_id: (
+                f"#{checklist_id} | "
+                f"{checklist_lookup[checklist_id].get('date_of_race') or ''} | "
+                f"{checklist_lookup[checklist_id].get('horse_name') or ''} | "
+                f"{checklist_lookup[checklist_id].get('venue_name') or ''}"
+            ),
+            key="selected_review_checklist_id",
+        )
 
-            selected_entry = checklist_lookup.get(selected_review_checklist_id)
+        selected_entry = checklist_lookup.get(selected_review_checklist_id)
 
-            if selected_entry:
-                with st.expander(
-                    f"Edit Checklist #{selected_entry['id']}",
-                    expanded=False,
-                ):
-                    render_checklist_editor(
-                        entry=selected_entry,
-                        owner_id=owner_id,
-                        horses=horses,
-                        jockeys=jockeys,
-                        trainers=trainers,
-                        breeding_farms=breeding_farms,
-                        stallions=stallions,
-                        venues=venues,
-                        race_names=race_names,
-                        criteria=criteria,
-                    )
+        if selected_entry:
+            with st.expander(
+                f"Edit Checklist #{selected_entry['id']}",
+                expanded=False,
+            ):
+                render_checklist_editor(
+                    entry=selected_entry,
+                    owner_id=owner_id,
+                    horses=horses,
+                    jockeys=jockeys,
+                    trainers=trainers,
+                    breeding_farms=breeding_farms,
+                    stallions=stallions,
+                    venues=venues,
+                    race_names=race_names,
+                    criteria=criteria,
+                )
 
     else:
         st.info("No checklists match the current filters.")
