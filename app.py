@@ -4248,18 +4248,18 @@ def render_checklist_review_page():
     metric_col1.metric("Total Results", review_metrics["total"])
     metric_col2.metric("Completed", review_metrics["completed"])
     metric_col3.metric(
-        "Win Rate",
-        (
-            f"{review_metrics['win_rate']:.1f}%"
-            if review_metrics["win_rate"] is not None
-            else "N/A"
-        ),
-    )
-    metric_col4.metric(
         "Top 3 Rate",
         (
             f"{review_metrics['top_3_rate']:.1f}%"
             if review_metrics["top_3_rate"] is not None
+            else "N/A"
+        ),
+    )
+    metric_col4.metric(
+        "Win Rate",
+        (
+            f"{review_metrics['win_rate']:.1f}%"
+            if review_metrics["win_rate"] is not None
             else "N/A"
         ),
     )
