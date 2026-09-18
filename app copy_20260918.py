@@ -58,16 +58,6 @@ def init_db():
     """)
 
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS horse_owners (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            horse_owner_name TEXT NOT NULL,
-            UNIQUE(owner_id, horse_owner_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
         CREATE TABLE IF NOT EXISTS jockeys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id INTEGER NOT NULL,
@@ -142,7 +132,6 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id INTEGER NOT NULL,
             horse_id INTEGER,
-            horse_owner_id INTEGER,
             jockey_id INTEGER,
             previous_jockey_id INTEGER,
             trainer_id INTEGER,
@@ -165,7 +154,6 @@ def init_db():
             horse_weight REAL,
             FOREIGN KEY(owner_id) REFERENCES users(id),
             FOREIGN KEY(horse_id) REFERENCES horses(id),
-            FOREIGN KEY(horse_owner_id) REFERENCES horse_owners(id),
             FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
             FOREIGN KEY(previous_jockey_id) REFERENCES jockeys(id),
             FOREIGN KEY(trainer_id) REFERENCES trainers(id),
@@ -193,7 +181,6 @@ def init_db():
     existing_columns = {row["name"] for row in cursor.fetchall()}
 
     required_columns = {
-        "horse_owner_id": "INTEGER",
         "jockey_id": "INTEGER",
         "previous_jockey_id": "INTEGER",
         "trainer_id": "INTEGER",
@@ -373,16 +360,7 @@ def parse_boolean(value):
 
     normalized = clean_text(value).lower()
 
-    return normalized in {
-        "1",
-        "true",
-        "t",
-        "yes",
-        "y",
-        "on",
-        "checked",
-        "✓",
-    }
+    return normalized in {"1", "true", "t", "yes", "y", "on", "checked", "✓"}
 
 
 def make_options(items, label_key):
@@ -452,7 +430,6 @@ def second_filter_widget_load_version_key(owner_id, field_name):
 def get_filter_defaults():
     return {
         "horse_id": None,
-        "horse_owner_id": None,
         "jockey_id": None,
         "previous_jockey_id": None,
         "trainer_id": None,
@@ -529,7 +506,6 @@ def reset_filter_values(owner_id):
 
     selectbox_fields = [
         "horse_id",
-        "horse_owner_id",
         "jockey_id",
         "previous_jockey_id",
         "trainer_id",
@@ -554,7 +530,6 @@ def reset_second_filter_values(owner_id):
 
     selectbox_fields = [
         "horse_id",
-        "horse_owner_id",
         "jockey_id",
         "previous_jockey_id",
         "trainer_id",
@@ -684,7 +659,6 @@ def checklist_to_export_rows(checklists, criteria_items=None):
         row = {
             "id": entry.get("id"),
             "horse_name": entry.get("horse_name", ""),
-            "horse_owner_name": entry.get("horse_owner_name", ""),
             "jockey_name": entry.get("jockey_name", ""),
             "previous_jockey_name": entry.get("previous_jockey_name", ""),
             "trainer_name": entry.get("trainer_name", ""),
@@ -732,7 +706,6 @@ def build_csv_download_bytes(
         columns = [
             "id",
             "horse_name",
-            "horse_owner_name",
             "jockey_name",
             "previous_jockey_name",
             "trainer_name",
@@ -770,7 +743,6 @@ def build_import_template_bytes(criteria_items):
     columns = [
         "id",
         "horse_name",
-        "horse_owner_name",
         "jockey_name",
         "previous_jockey_name",
         "trainer_name",
@@ -803,7 +775,6 @@ def build_import_template_bytes(criteria_items):
     sample_row = {
         "id": "",
         "horse_name": "Sample Horse A",
-        "horse_owner_name": "Sample Horse Owner",
         "jockey_name": "Sample Jockey",
         "previous_jockey_name": "",
         "trainer_name": "Sample Trainer",
@@ -1226,7 +1197,6 @@ def collect_current_filter_data(owner_id):
 
     return {
         "horse_id": get_value("horse_id", None),
-        "horse_owner_id": get_value("horse_owner_id", None),
         "jockey_id": get_value("jockey_id", None),
         "previous_jockey_id": get_value("previous_jockey_id", None),
         "trainer_id": get_value("trainer_id", None),
@@ -1278,7 +1248,6 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
         saved_venue_ids = [legacy_venue_id] if legacy_venue_id is not None else []
 
     set_value("horse_id", filter_data.get("horse_id"))
-    set_value("horse_owner_id", filter_data.get("horse_owner_id"))
     set_value("jockey_id", filter_data.get("jockey_id"))
     set_value("previous_jockey_id", filter_data.get("previous_jockey_id"))
     set_value("trainer_id", filter_data.get("trainer_id"))
@@ -1339,7 +1308,6 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
 # -------------------------------------------------
 TEMPLATE_CONFIG = {
     "horse": ("horses", "horse_name"),
-    "horse_owner": ("horse_owners", "horse_owner_name"),
     "jockey": ("jockeys", "jockey_name"),
     "trainer": ("trainers", "trainer_name"),
     "breeding_farm": ("breeding_farms", "breeding_farm_name"),
@@ -1471,10 +1439,6 @@ def get_user_horses(owner_id):
     return get_template_items("horse", owner_id)
 
 
-def get_user_horse_owners(owner_id):
-    return get_template_items("horse_owner", owner_id)
-
-
 def get_user_jockeys(owner_id):
     return get_template_items("jockey", owner_id)
 
@@ -1579,7 +1543,6 @@ def find_template_item_id(template_type, owner_id, value):
 def add_checklist(
     owner_id,
     horse_id,
-    horse_owner_id,
     jockey_id,
     previous_jockey_id,
     trainer_id,
@@ -1632,7 +1595,6 @@ def add_checklist(
             INSERT INTO checklists (
                 owner_id,
                 horse_id,
-                horse_owner_id,
                 jockey_id,
                 previous_jockey_id,
                 trainer_id,
@@ -1654,12 +1616,11 @@ def add_checklist(
                 horse_number,
                 horse_weight
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 owner_id,
                 horse_id,
-                horse_owner_id,
                 jockey_id,
                 previous_jockey_id,
                 trainer_id,
@@ -1702,7 +1663,6 @@ def update_checklist(
     checklist_id,
     owner_id,
     horse_id,
-    horse_owner_id,
     jockey_id,
     previous_jockey_id,
     trainer_id,
@@ -1758,7 +1718,6 @@ def update_checklist(
             UPDATE checklists
             SET
                 horse_id = ?,
-                horse_owner_id = ?,
                 jockey_id = ?,
                 previous_jockey_id = ?,
                 trainer_id = ?,
@@ -1783,7 +1742,6 @@ def update_checklist(
             """,
             (
                 horse_id,
-                horse_owner_id,
                 jockey_id,
                 previous_jockey_id,
                 trainer_id,
@@ -1896,8 +1854,6 @@ def get_user_checklists(owner_id):
                 checklists.id,
                 checklists.horse_id,
                 horses.horse_name,
-                checklists.horse_owner_id,
-                horse_owners.horse_owner_name,
                 checklists.jockey_id,
                 jockeys.jockey_name,
                 checklists.previous_jockey_id,
@@ -1928,8 +1884,6 @@ def get_user_checklists(owner_id):
                 checklists.horse_weight
             FROM checklists
             LEFT JOIN horses ON checklists.horse_id = horses.id
-            LEFT JOIN horse_owners
-                ON checklists.horse_owner_id = horse_owners.id
             LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
             LEFT JOIN jockeys AS prev_jockey
                 ON checklists.previous_jockey_id = prev_jockey.id
@@ -1956,11 +1910,6 @@ def get_user_checklists(owner_id):
                     "id": row["id"],
                     "horse_id": row["horse_id"],
                     "horse_name": row["horse_name"] or "No horse selected",
-                    "horse_owner_id": row["horse_owner_id"],
-                    "horse_owner_name": (
-                        row["horse_owner_name"]
-                        or "No horse owner selected"
-                    ),
                     "jockey_id": row["jockey_id"],
                     "jockey_name": row["jockey_name"] or "No jockey selected",
                     "previous_jockey_id": row["previous_jockey_id"],
@@ -2013,7 +1962,6 @@ def get_user_checklists(owner_id):
 IMPORT_COLUMN_ALIASES = {
     "id": ["id", "checklist_id"],
     "horse_name": ["horse_name", "horse"],
-    "horse_owner_name": ["horse_owner_name", "horse_owner"],
     "jockey_name": ["jockey_name", "jockey"],
     "previous_jockey_name": ["previous_jockey_name", "previous_jockey"],
     "trainer_name": ["trainer_name", "trainer"],
@@ -2103,7 +2051,10 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
             )
         ]
 
-    if "date_of_race" not in normalized_columns:
+    if (
+        "date_of_race" not in normalized_columns
+        or "date_of_race" not in normalized_columns
+    ):
         return 0, 0, 0, [(0, "Missing required column: date_of_race.")]
 
     added_count = 0
@@ -2137,16 +2088,6 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
                 "horse",
                 owner_id,
                 horse_name,
-            )
-
-            horse_owner_id = find_or_create_template_item(
-                "horse_owner",
-                owner_id,
-                get_row_value(
-                    row,
-                    normalized_columns,
-                    "horse_owner_name",
-                ),
             )
 
             jockey_id = find_or_create_template_item(
@@ -2266,7 +2207,6 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
                     checklist_id=target_checklist_id,
                     owner_id=owner_id,
                     horse_id=horse_id,
-                    horse_owner_id=horse_owner_id,
                     jockey_id=jockey_id,
                     previous_jockey_id=previous_jockey_id,
                     trainer_id=trainer_id,
@@ -2298,7 +2238,6 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
                 success, message = add_checklist(
                     owner_id=owner_id,
                     horse_id=horse_id,
-                    horse_owner_id=horse_owner_id,
                     jockey_id=jockey_id,
                     previous_jockey_id=previous_jockey_id,
                     trainer_id=trainer_id,
@@ -2418,7 +2357,6 @@ def render_race_checklist_page():
     st.header("Race Checklist")
 
     horses = get_user_horses(owner_id)
-    horse_owners = get_user_horse_owners(owner_id)
     jockeys = get_user_jockeys(owner_id)
     trainers = get_user_trainers(owner_id)
     breeding_farms = get_user_breeding_farms(owner_id)
@@ -2428,10 +2366,6 @@ def render_race_checklist_page():
     criteria = get_user_criteria(owner_id)
 
     horse_options, horse_ids = make_options(horses, "horse_name")
-    horse_owner_options, horse_owner_ids = make_options(
-        horse_owners,
-        "horse_owner_name",
-    )
     jockey_options, jockey_ids = make_options(jockeys, "jockey_name")
     trainer_options, trainer_ids = make_options(trainers, "trainer_name")
     breeding_farm_options, breeding_farm_ids = make_options(
@@ -2447,11 +2381,6 @@ def render_race_checklist_page():
             "Select Horse (optional)",
             range(len(horse_options)),
             format_func=lambda i: horse_options[i],
-        )
-        selected_horse_owner_idx = st.selectbox(
-            "Select Horse Owner (optional)",
-            range(len(horse_owner_options)),
-            format_func=lambda i: horse_owner_options[i],
         )
         selected_jockey_idx = st.selectbox(
             "Select Jockey (optional)",
@@ -2532,7 +2461,7 @@ def render_race_checklist_page():
                 step=0.1,
             )
             prize = st.number_input(
-                "Prize (optional) (¥)",
+                "Prize (optional)",
                 min_value=0.0,
                 max_value=1000000000.0,
                 value=0.0,
@@ -2573,10 +2502,6 @@ def render_race_checklist_page():
         success, message = add_checklist(
             owner_id=owner_id,
             horse_id=get_selected_id(horse_ids, selected_horse_idx),
-            horse_owner_id=get_selected_id(
-                horse_owner_ids,
-                selected_horse_owner_idx,
-            ),
             jockey_id=get_selected_id(jockey_ids, selected_jockey_idx),
             previous_jockey_id=get_selected_id(
                 jockey_ids,
@@ -2777,7 +2702,6 @@ def filter_checklists(
                 [
                     clean_text(entry.get("memo")).lower(),
                     clean_text(entry.get("horse_name")).lower(),
-                    clean_text(entry.get("horse_owner_name")).lower(),
                     clean_text(entry.get("jockey_name")).lower(),
                     clean_text(entry.get("previous_jockey_name")).lower(),
                     clean_text(entry.get("trainer_name")).lower(),
@@ -2869,7 +2793,6 @@ def build_summary_dataframe(checklists):
                 "ID": entry["id"],
                 "Date": entry.get("date_of_race") or "",
                 "Horse": entry.get("horse_name") or "",
-                "Horse Owner": entry.get("horse_owner_name") or "",
                 "Jockey": entry.get("jockey_name") or "",
                 "Race": entry.get("race_name") or "",
                 "Venue": entry.get("venue_name") or "",
@@ -2961,7 +2884,6 @@ def render_checklist_editor(
     entry,
     owner_id,
     horses,
-    horse_owners,
     jockeys,
     trainers,
     breeding_farms,
@@ -2973,10 +2895,6 @@ def render_checklist_editor(
     st.subheader(f"Edit Checklist #{entry['id']}")
 
     horse_options, horse_ids = make_options(horses, "horse_name")
-    horse_owner_options, horse_owner_ids = make_options(
-        horse_owners,
-        "horse_owner_name",
-    )
     jockey_options, jockey_ids = make_options(jockeys, "jockey_name")
     trainer_options, trainer_ids = make_options(trainers, "trainer_name")
     breeding_farm_options, breeding_farm_ids = make_options(
@@ -2998,16 +2916,6 @@ def render_checklist_editor(
             range(len(horse_options)),
             index=selected_index(horse_ids, entry.get("horse_id")),
             format_func=lambda i: horse_options[i],
-        )
-
-        edit_horse_owner_idx = st.selectbox(
-            "Horse Owner",
-            range(len(horse_owner_options)),
-            index=selected_index(
-                horse_owner_ids,
-                entry.get("horse_owner_id"),
-            ),
-            format_func=lambda i: horse_owner_options[i],
         )
 
         edit_jockey_idx = st.selectbox(
@@ -3181,10 +3089,6 @@ def render_checklist_editor(
             checklist_id=entry["id"],
             owner_id=owner_id,
             horse_id=get_selected_id(horse_ids, edit_horse_idx),
-            horse_owner_id=get_selected_id(
-                horse_owner_ids,
-                edit_horse_owner_idx,
-            ),
             jockey_id=get_selected_id(jockey_ids, edit_jockey_idx),
             previous_jockey_id=get_selected_id(
                 jockey_ids,
@@ -3248,8 +3152,6 @@ def render_second_filter_section(
     first_filtered_checklists,
     horse_ids,
     horse_options,
-    horse_owner_ids,
-    horse_owner_options,
     jockey_ids,
     jockey_options,
     trainer_ids,
@@ -3307,14 +3209,6 @@ def render_second_filter_section(
             "horse_id",
             horse_ids,
             horse_options,
-        )
-
-        selected_horse_owner_id = render_second_filter_selectbox(
-            "Second Filter by Horse Owner",
-            owner_id,
-            "horse_owner_id",
-            horse_owner_ids,
-            horse_owner_options,
         )
 
         selected_jockey_id = render_second_filter_selectbox(
@@ -3556,7 +3450,6 @@ def render_second_filter_section(
 
     second_selected_filters = {
         "horse_id": selected_horse_id,
-        "horse_owner_id": selected_horse_owner_id,
         "jockey_id": selected_jockey_id,
         "previous_jockey_id": selected_previous_jockey_id,
         "trainer_id": selected_trainer_id,
@@ -3612,7 +3505,6 @@ def render_checklist_review_page():
 
     checklists = get_user_checklists(owner_id)
     horses = get_user_horses(owner_id)
-    horse_owners = get_user_horse_owners(owner_id)
     jockeys = get_user_jockeys(owner_id)
     trainers = get_user_trainers(owner_id)
     breeding_farms = get_user_breeding_farms(owner_id)
@@ -3622,10 +3514,6 @@ def render_checklist_review_page():
     criteria = get_user_criteria(owner_id)
 
     horse_options, horse_ids = make_options(horses, "horse_name")
-    horse_owner_options, horse_owner_ids = make_options(
-        horse_owners,
-        "horse_owner_name",
-    )
     jockey_options, jockey_ids = make_options(jockeys, "jockey_name")
     trainer_options, trainer_ids = make_options(trainers, "trainer_name")
     breeding_farm_options, breeding_farm_ids = make_options(
@@ -3846,14 +3734,6 @@ def render_checklist_review_page():
                 "horse_id",
                 horse_ids,
                 horse_options,
-            )
-
-            selected_horse_owner_id = render_filter_selectbox(
-                "Filter by Horse Owner",
-                owner_id,
-                "horse_owner_id",
-                horse_owner_ids,
-                horse_owner_options,
             )
 
             selected_jockey_id = render_filter_selectbox(
@@ -4131,7 +4011,6 @@ def render_checklist_review_page():
 
     selected_filters = {
         "horse_id": selected_horse_id,
-        "horse_owner_id": selected_horse_owner_id,
         "jockey_id": selected_jockey_id,
         "previous_jockey_id": selected_previous_jockey_id,
         "trainer_id": selected_trainer_id,
@@ -4185,8 +4064,6 @@ def render_checklist_review_page():
                 first_filtered_checklists=first_filtered_checklists,
                 horse_ids=horse_ids,
                 horse_options=horse_options,
-                horse_owner_ids=horse_owner_ids,
-                horse_owner_options=horse_owner_options,
                 jockey_ids=jockey_ids,
                 jockey_options=jockey_options,
                 trainer_ids=trainer_ids,
@@ -4239,6 +4116,8 @@ def render_checklist_review_page():
             "The results list below still shows all first-filter results."
         )
 
+    # Metrics are calculated from every first-filter result, not only the
+    # currently displayed page.
     review_metrics = calculate_review_metrics(first_filtered_checklists)
 
     st.subheader("Review Summary")
@@ -4248,18 +4127,18 @@ def render_checklist_review_page():
     metric_col1.metric("Total Results", review_metrics["total"])
     metric_col2.metric("Completed", review_metrics["completed"])
     metric_col3.metric(
-        "Win Rate",
-        (
-            f"{review_metrics['win_rate']:.1f}%"
-            if review_metrics["win_rate"] is not None
-            else "N/A"
-        ),
-    )
-    metric_col4.metric(
         "Top 3 Rate",
         (
             f"{review_metrics['top_3_rate']:.1f}%"
             if review_metrics["top_3_rate"] is not None
+            else "N/A"
+        ),
+    )
+    metric_col4.metric(
+        "Win Rate",
+        (
+            f"{review_metrics['win_rate']:.1f}%"
+            if review_metrics["win_rate"] is not None
             else "N/A"
         ),
     )
@@ -4303,18 +4182,21 @@ def render_checklist_review_page():
         with display_col1:
             page_size_options = [25, 50, 100, 200, "Show all"]
 
-            saved_page_size = st.session_state.get(
-                saved_filter_key(owner_id, "page_size"),
-                50,
-            )
-
-            if saved_page_size not in page_size_options:
-                saved_page_size = 50
-
             selected_page_size = st.selectbox(
                 "Results per page",
                 page_size_options,
-                index=page_size_options.index(saved_page_size),
+                index=page_size_options.index(
+                    st.session_state.get(
+                        saved_filter_key(owner_id, "page_size"),
+                        50,
+                    )
+                    if st.session_state.get(
+                        saved_filter_key(owner_id, "page_size"),
+                        50,
+                    )
+                    in page_size_options
+                    else 50
+                ),
                 key=saved_filter_key(owner_id, "page_size_selector"),
             )
 
@@ -4379,7 +4261,6 @@ def render_checklist_review_page():
                     f"#{checklist_id} | "
                     f"{checklist_lookup[checklist_id].get('date_of_race') or ''} | "
                     f"{checklist_lookup[checklist_id].get('horse_name') or ''} | "
-                    f"{checklist_lookup[checklist_id].get('horse_owner_name') or ''} | "
                     f"{checklist_lookup[checklist_id].get('venue_name') or ''}"
                 ),
                 key="selected_review_checklist_id",
@@ -4396,7 +4277,6 @@ def render_checklist_review_page():
                         entry=selected_entry,
                         owner_id=owner_id,
                         horses=horses,
-                        horse_owners=horse_owners,
                         jockeys=jockeys,
                         trainers=trainers,
                         breeding_farms=breeding_farms,
@@ -4544,7 +4424,6 @@ def main():
             "Checklist Review",
             "Account Settings",
             "Horses",
-            "Horse Owners",
             "Jockeys",
             "Trainers",
             "Breeding Farms",
@@ -4567,12 +4446,6 @@ def main():
         render_account_settings_page()
     elif page == "Horses":
         render_template_page("horse", "Horses", "Horse Name")
-    elif page == "Horse Owners":
-        render_template_page(
-            "horse_owner",
-            "Horse Owners",
-            "Horse Owner Name",
-        )
     elif page == "Jockeys":
         render_template_page("jockey", "Jockeys", "Jockey Name")
     elif page == "Trainers":
