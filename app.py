@@ -153,6 +153,8 @@ def init_db():
             race_name_id INTEGER,
             distance INTEGER,
             date_of_race TEXT,
+            previous_race_date TEXT,
+            interval_days INTEGER,
             memo TEXT,
             finished_place TEXT,
             checklist TEXT,
@@ -204,6 +206,8 @@ def init_db():
         "race_name_id": "INTEGER",
         "distance": "INTEGER",
         "date_of_race": "TEXT",
+        "previous_race_date": "TEXT",
+        "interval_days": "INTEGER",
         "memo": "TEXT",
         "finished_place": "TEXT",
         "checklist": "TEXT",
@@ -230,6 +234,11 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_checklists_owner_date
         ON checklists (owner_id, date_of_race DESC)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_checklists_owner_interval
+        ON checklists (owner_id, interval_days)
     """)
 
     cursor.execute("""
@@ -316,6 +325,18 @@ def normalize_date(date_val):
         pass
 
     return date_str if date_str else None
+
+
+def calculate_interval_days(date_of_race, previous_race_date):
+    current_date = parse_race_date(date_of_race)
+    previous_date = parse_race_date(previous_race_date)
+
+    if current_date is None or previous_date is None:
+        return None
+
+    interval_days = (current_date - previous_date).days
+
+    return interval_days if interval_days >= 0 else None
 
 
 def to_optional_int(value):
@@ -472,6 +493,8 @@ def get_filter_defaults():
         "criteria_mode": "AND",
         "distance_from": 0,
         "distance_to": 5000,
+        "interval_days_from": 0,
+        "interval_days_to": 9999,
         "date_from": None,
         "date_to": None,
         "places": [],
@@ -695,6 +718,8 @@ def checklist_to_export_rows(checklists, criteria_items=None):
             "race_name": entry.get("race_name", ""),
             "distance": entry.get("distance"),
             "date_of_race": entry.get("date_of_race", ""),
+            "previous_race_date": entry.get("previous_race_date", ""),
+            "interval_days": entry.get("interval_days"),
             "memo": entry.get("memo", ""),
             "finished_place": entry.get("finished_place", ""),
             "program_number": entry.get("program_number"),
@@ -743,6 +768,8 @@ def build_csv_download_bytes(
             "race_name",
             "distance",
             "date_of_race",
+            "previous_race_date",
+            "interval_days",
             "memo",
             "finished_place",
             "program_number",
@@ -781,6 +808,8 @@ def build_import_template_bytes(criteria_items):
         "race_name",
         "distance",
         "date_of_race",
+        "previous_race_date",
+        "interval_days",
         "memo",
         "finished_place",
         "program_number",
@@ -814,6 +843,8 @@ def build_import_template_bytes(criteria_items):
         "race_name": "Sample Race",
         "distance": 1600,
         "date_of_race": "2025-04-01",
+        "previous_race_date": "2025-03-02",
+        "interval_days": 30,
         "memo": "Sample memo",
         "finished_place": "",
         "program_number": 11,
@@ -1246,6 +1277,8 @@ def collect_current_filter_data(owner_id):
         "criteria_mode": get_value("criteria_mode", "AND"),
         "distance_from": get_value("distance_from", 0),
         "distance_to": get_value("distance_to", 5000),
+        "interval_days_from": get_value("interval_days_from", 0),
+        "interval_days_to": get_value("interval_days_to", 9999),
         "date_from": date_from.isoformat() if isinstance(date_from, date) else None,
         "date_to": date_to.isoformat() if isinstance(date_to, date) else None,
         "finished_places": get_value("places", []),
@@ -1304,6 +1337,14 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
     set_value("criteria_mode", filter_data.get("criteria_mode", "AND"))
     set_value("distance_from", int(filter_data.get("distance_from", 0) or 0))
     set_value("distance_to", int(filter_data.get("distance_to", 5000) or 5000))
+    set_value(
+        "interval_days_from",
+        int(filter_data.get("interval_days_from", 0) or 0),
+    )
+    set_value(
+        "interval_days_to",
+        int(filter_data.get("interval_days_to", 9999) or 9999),
+    )
     set_value("date_from", date_from)
     set_value("date_to", date_to)
     set_value("places", filter_data.get("finished_places", []) or [])
@@ -1590,6 +1631,7 @@ def add_checklist(
     race_name_id,
     distance,
     date_of_race,
+    previous_race_date,
     memo,
     finished_place,
     checklist_data,
@@ -1621,6 +1663,11 @@ def add_checklist(
                     "A checklist for this horse and race date is already registered.",
                 )
 
+        interval_days = calculate_interval_days(
+            date_of_race,
+            previous_race_date,
+        )
+
         checklist_json = (
             json.dumps(checklist_data, ensure_ascii=False)
             if checklist_data
@@ -1643,6 +1690,8 @@ def add_checklist(
                 race_name_id,
                 distance,
                 date_of_race,
+                previous_race_date,
+                interval_days,
                 memo,
                 finished_place,
                 checklist,
@@ -1654,7 +1703,7 @@ def add_checklist(
                 horse_number,
                 horse_weight
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 owner_id,
@@ -1670,6 +1719,8 @@ def add_checklist(
                 race_name_id,
                 distance,
                 date_of_race,
+                previous_race_date,
+                interval_days,
                 memo,
                 finished_place,
                 checklist_json,
@@ -1713,6 +1764,7 @@ def update_checklist(
     race_name_id,
     distance,
     date_of_race,
+    previous_race_date,
     memo,
     finished_place,
     program_number,
@@ -1747,6 +1799,11 @@ def update_checklist(
                     "Another checklist for this horse and race date is already registered.",
                 )
 
+        interval_days = calculate_interval_days(
+            date_of_race,
+            previous_race_date,
+        )
+
         checklist_json = (
             json.dumps(checklist_data, ensure_ascii=False)
             if checklist_data
@@ -1769,6 +1826,8 @@ def update_checklist(
                 race_name_id = ?,
                 distance = ?,
                 date_of_race = ?,
+                previous_race_date = ?,
+                interval_days = ?,
                 memo = ?,
                 finished_place = ?,
                 checklist = ?,
@@ -1794,6 +1853,8 @@ def update_checklist(
                 race_name_id,
                 distance,
                 date_of_race,
+                previous_race_date,
+                interval_days,
                 memo,
                 finished_place,
                 checklist_json,
@@ -1916,6 +1977,8 @@ def get_user_checklists(owner_id):
                 race_names.race_name,
                 checklists.distance,
                 checklists.date_of_race,
+                checklists.previous_race_date,
+                checklists.interval_days,
                 checklists.memo,
                 checklists.finished_place,
                 checklists.checklist,
@@ -1988,6 +2051,8 @@ def get_user_checklists(owner_id):
                     "race_name": row["race_name"] or "No race name selected",
                     "distance": row["distance"],
                     "date_of_race": row["date_of_race"],
+                    "previous_race_date": row["previous_race_date"],
+                    "interval_days": row["interval_days"],
                     "memo": row["memo"] or "",
                     "finished_place": row["finished_place"] or "",
                     "checklist": safe_json_loads(row["checklist"]),
@@ -2024,6 +2089,8 @@ IMPORT_COLUMN_ALIASES = {
     "race_name": ["race_name"],
     "distance": ["distance"],
     "date_of_race": ["date_of_race"],
+    "previous_race_date": ["previous_race_date"],
+    "interval_days": ["interval_days"],
     "memo": ["memo"],
     "finished_place": ["finished_place"],
     "program_number": ["program_number"],
@@ -2124,6 +2191,13 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
             race_date = normalize_date(
                 get_row_value(row, normalized_columns, "date_of_race")
             )
+            previous_race_date = normalize_date(
+                get_row_value(
+                    row,
+                    normalized_columns,
+                    "previous_race_date",
+                )
+            )
 
             if not horse_name:
                 failed_rows.append((row_number, "Horse name is required."))
@@ -2131,6 +2205,18 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
 
             if not race_date:
                 failed_rows.append((row_number, "Date of race is required."))
+                continue
+
+            if (
+                previous_race_date
+                and calculate_interval_days(race_date, previous_race_date) is None
+            ):
+                failed_rows.append(
+                    (
+                        row_number,
+                        "Previous race date cannot be after the current race date.",
+                    )
+                )
                 continue
 
             horse_id = find_or_create_template_item(
@@ -2277,6 +2363,7 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
                     race_name_id=race_name_id,
                     distance=distance,
                     date_of_race=race_date,
+                    previous_race_date=previous_race_date,
                     memo=memo,
                     finished_place=finished_place,
                     program_number=program_number,
@@ -2309,6 +2396,7 @@ def import_checklist_dataframe(owner_id, df, criteria_items):
                     race_name_id=race_name_id,
                     distance=distance,
                     date_of_race=race_date,
+                    previous_race_date=previous_race_date,
                     memo=memo,
                     finished_place=finished_place,
                     checklist_data=checklist_data,
@@ -2506,6 +2594,27 @@ def render_race_checklist_page():
             min_value=date(1980, 1, 1),
             value=date.today(),
         )
+        previous_race_date = st.date_input(
+            "Previous Race Date (optional)",
+            min_value=date(1980, 1, 1),
+            max_value=date_of_race,
+            value=None,
+        )
+
+        interval_days_preview = calculate_interval_days(
+            date_of_race,
+            previous_race_date,
+        )
+
+        if interval_days_preview is None:
+            st.caption(
+                "Days Since Last Race: Enter a previous race date to calculate."
+            )
+        else:
+            st.info(
+                f"Days Since Last Race: {interval_days_preview} day(s)"
+            )
+
         memo = st.text_area("Memo (optional)")
         finished_place = st.text_input("Finished Place (optional)")
 
@@ -2596,6 +2705,11 @@ def render_race_checklist_page():
             race_name_id=get_selected_id(race_ids, selected_race_idx),
             distance=to_optional_int(distance),
             date_of_race=date_of_race.isoformat(),
+            previous_race_date=(
+                previous_race_date.isoformat()
+                if previous_race_date
+                else None
+            ),
             memo=clean_text(memo),
             finished_place=clean_text(finished_place),
             checklist_data=checklist_data if any(checklist_data.values()) else None,
@@ -2623,7 +2737,9 @@ def render_batch_import_section(owner_id, criteria_items):
     st.caption(
         "Download the template or filtered-results CSV, edit it, and upload "
         "it here. Every current checklist criterion is included as a "
-        "`criteria__...` column. Use 1 / TRUE / YES for checked criteria."
+        "`criteria__...` column. Use 1 / TRUE / YES for checked criteria. "
+        "The interval_days value is calculated automatically from "
+        "date_of_race and previous_race_date."
     )
 
     st.download_button(
@@ -2695,6 +2811,8 @@ def filter_checklists(
     criteria_mode,
     distance_from,
     distance_to,
+    interval_days_from,
+    interval_days_to,
     date_from,
     date_to,
     memo_keyword,
@@ -2768,6 +2886,17 @@ def filter_checklists(
         distance_value = distance_value if distance_value is not None else 0
 
         if distance_value < distance_from or distance_value > distance_to:
+            continue
+
+        interval_days_value = entry.get("interval_days")
+
+        if interval_days_value is None:
+            if interval_days_from > 0:
+                continue
+        elif (
+            interval_days_value < interval_days_from
+            or interval_days_value > interval_days_to
+        ):
             continue
 
         if memo_keyword.strip():
@@ -2868,6 +2997,12 @@ def build_summary_dataframe(checklists):
             {
                 "ID": entry["id"],
                 "Date": entry.get("date_of_race") or "",
+                "Previous Race Date": entry.get("previous_race_date") or "",
+                "Days Since Last Race": (
+                    entry.get("interval_days")
+                    if entry.get("interval_days") is not None
+                    else ""
+                ),
                 "Horse": entry.get("horse_name") or "",
                 "Horse Owner": entry.get("horse_owner_name") or "",
                 "Jockey": entry.get("jockey_name") or "",
@@ -2991,6 +3126,9 @@ def render_checklist_editor(
         return ids.index(entry_id) if entry_id in ids else 0
 
     existing_date = parse_race_date(entry.get("date_of_race")) or date.today()
+    existing_previous_race_date = parse_race_date(
+        entry.get("previous_race_date")
+    )
 
     with st.form(f"edit_checklist_form_{entry['id']}"):
         edit_horse_idx = st.selectbox(
@@ -3087,6 +3225,27 @@ def render_checklist_editor(
             "Date of Race",
             value=existing_date,
         )
+
+        edit_previous_race_date = st.date_input(
+            "Previous Race Date (optional)",
+            min_value=date(1980, 1, 1),
+            max_value=edit_date,
+            value=existing_previous_race_date,
+        )
+
+        edit_interval_days_preview = calculate_interval_days(
+            edit_date,
+            edit_previous_race_date,
+        )
+
+        if edit_interval_days_preview is None:
+            st.caption(
+                "Days Since Last Race: Enter a previous race date to calculate."
+            )
+        else:
+            st.info(
+                f"Days Since Last Race: {edit_interval_days_preview} day(s)"
+            )
 
         edit_memo = st.text_area(
             "Memo",
@@ -3207,6 +3366,11 @@ def render_checklist_editor(
             race_name_id=get_selected_id(race_ids, edit_race_idx),
             distance=to_optional_int(edit_distance),
             date_of_race=edit_date.isoformat(),
+            previous_race_date=(
+                edit_previous_race_date.isoformat()
+                if edit_previous_race_date
+                else None
+            ),
             memo=clean_text(edit_memo),
             finished_place=clean_text(edit_finished_place),
             program_number=to_optional_int(edit_program_number),
@@ -3467,6 +3631,22 @@ def render_second_filter_section(
             key=second_filter_key(owner_id, "distance_to"),
         )
 
+        second_filter_interval_days_from = st.number_input(
+            "Second Filter From Days Since Last Race",
+            min_value=0,
+            max_value=9999,
+            step=1,
+            key=second_filter_key(owner_id, "interval_days_from"),
+        )
+
+        second_filter_interval_days_to = st.number_input(
+            "Second Filter To Days Since Last Race",
+            min_value=0,
+            max_value=9999,
+            step=1,
+            key=second_filter_key(owner_id, "interval_days_to"),
+        )
+
         second_filter_date_from = st.date_input(
             "Second Filter From Date",
             key=second_filter_key(owner_id, "date_from"),
@@ -3574,6 +3754,8 @@ def render_second_filter_section(
         criteria_mode=second_criteria_mode,
         distance_from=second_filter_distance_from,
         distance_to=second_filter_distance_to,
+        interval_days_from=second_filter_interval_days_from,
+        interval_days_to=second_filter_interval_days_to,
         date_from=second_filter_date_from,
         date_to=second_filter_date_to,
         memo_keyword=second_filter_memo_keyword,
@@ -4007,6 +4189,26 @@ def render_checklist_review_page():
                 key=saved_filter_key(owner_id, "distance_to"),
             )
 
+            filter_interval_days_from = st.number_input(
+                "From Days Since Last Race",
+                min_value=0,
+                max_value=9999,
+                step=1,
+                help=(
+                    "0 includes records with no previous race date. "
+                    "Use 1 or more to require a calculated interval."
+                ),
+                key=saved_filter_key(owner_id, "interval_days_from"),
+            )
+
+            filter_interval_days_to = st.number_input(
+                "To Days Since Last Race",
+                min_value=0,
+                max_value=9999,
+                step=1,
+                key=saved_filter_key(owner_id, "interval_days_to"),
+            )
+
             filter_date_from = st.date_input(
                 "From Date",
                 key=saved_filter_key(owner_id, "date_from"),
@@ -4099,7 +4301,7 @@ def render_checklist_review_page():
         with filter_save_col1:
             saved_filter_title = st.text_input(
                 "Save current filter with title",
-                placeholder="Example: Tokyo and Nakayama excluding top 3",
+                placeholder="Example: Tokyo 1600m with 21-35 days interval",
                 key=saved_filter_key(owner_id, "new_title"),
             )
 
@@ -4149,6 +4351,8 @@ def render_checklist_review_page():
         criteria_mode=criteria_mode,
         distance_from=filter_distance_from,
         distance_to=filter_distance_to,
+        interval_days_from=filter_interval_days_from,
+        interval_days_to=filter_interval_days_to,
         date_from=filter_date_from,
         date_to=filter_date_to,
         memo_keyword=filter_memo_keyword,
@@ -4248,18 +4452,18 @@ def render_checklist_review_page():
     metric_col1.metric("Total Results", review_metrics["total"])
     metric_col2.metric("Completed", review_metrics["completed"])
     metric_col3.metric(
-        "Top 3 Rate",
-        (
-            f"{review_metrics['top_3_rate']:.1f}%"
-            if review_metrics["top_3_rate"] is not None
-            else "N/A"
-        ),
-    )
-    metric_col4.metric(
         "Win Rate",
         (
             f"{review_metrics['win_rate']:.1f}%"
             if review_metrics["win_rate"] is not None
+            else "N/A"
+        ),
+    )
+    metric_col4.metric(
+        "Top 3 Rate",
+        (
+            f"{review_metrics['top_3_rate']:.1f}%"
+            if review_metrics["top_3_rate"] is not None
             else "N/A"
         ),
     )
