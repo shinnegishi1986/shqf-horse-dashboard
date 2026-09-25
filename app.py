@@ -324,47 +324,12 @@ def parse_race_date(value):
 
 
 def normalize_date(date_val):
-    if date_val is None:
-        return None
+    parsed_date = parse_race_date(date_val)
 
-    if isinstance(date_val, float) and pd.isna(date_val):
-        return None
+    if parsed_date is not None:
+        return parsed_date.isoformat()
 
-    if isinstance(date_val, pd.Timestamp):
-        return date_val.date().strftime("%Y-%m-%d")
-
-    if isinstance(date_val, datetime):
-        return date_val.date().strftime("%Y-%m-%d")
-
-    if isinstance(date_val, date):
-        return date_val.strftime("%Y-%m-%d")
-
-    date_str = clean_text(date_val)
-
-    if not date_str:
-        return None
-
-    if " " in date_str:
-        date_str = date_str.split(" ")[0]
-
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y%m%d"):
-        try:
-            return datetime.strptime(date_str, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-
-    try:
-        if date_str.isdigit():
-            excel_date = pd.to_datetime(
-                float(date_str),
-                unit="d",
-                origin="1899-12-30",
-            )
-            return excel_date.strftime("%Y-%m-%d")
-    except Exception:
-        pass
-
-    return date_str
+    return None
 
 
 def calculate_interval_days(date_of_race, previous_race_date):
@@ -1756,6 +1721,9 @@ def add_checklist(
         normalized_date_of_race = normalize_date(date_of_race)
         normalized_previous_race_date = normalize_date(previous_race_date)
 
+        if not normalized_date_of_race:
+            return False, "Date of race is required."
+
         if (
             normalized_previous_race_date
             and calculate_interval_days(
@@ -1769,7 +1737,7 @@ def add_checklist(
                 "Previous race date cannot be after the current race date.",
             )
 
-        if horse_id is not None and normalized_date_of_race:
+        if horse_id is not None:
             cursor.execute(
                 """
                 SELECT id
@@ -1914,6 +1882,9 @@ def update_checklist(
         normalized_date_of_race = normalize_date(date_of_race)
         normalized_previous_race_date = normalize_date(previous_race_date)
 
+        if not normalized_date_of_race:
+            return False, "Date of race is required."
+
         if (
             normalized_previous_race_date
             and calculate_interval_days(
@@ -1927,7 +1898,7 @@ def update_checklist(
                 "Previous race date cannot be after the current race date.",
             )
 
-        if horse_id is not None and normalized_date_of_race:
+        if horse_id is not None:
             cursor.execute(
                 """
                 SELECT id
@@ -2085,6 +2056,11 @@ def find_checklist_id_by_horse_and_date(owner_id, horse_id, date_of_race):
     if horse_id is None or not date_of_race:
         return None
 
+    normalized_date_of_race = normalize_date(date_of_race)
+
+    if not normalized_date_of_race:
+        return None
+
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -2095,7 +2071,7 @@ def find_checklist_id_by_horse_and_date(owner_id, horse_id, date_of_race):
             FROM checklists
             WHERE owner_id = ? AND horse_id = ? AND date_of_race = ?
             """,
-            (owner_id, horse_id, normalize_date(date_of_race)),
+            (owner_id, horse_id, normalized_date_of_race),
         )
         row = cursor.fetchone()
 
@@ -3284,6 +3260,7 @@ def build_summary_dataframe(checklists):
                 "Weight Change (kg)": format_signed_number(
                     entry.get("weight_change")
                 ),
+                "Horse Weight (kg)": entry.get("horse_weight") or "",
                 "Place": entry.get("finished_place") or "",
                 "Odds": entry.get("odds")
                 if entry.get("odds") is not None
@@ -3319,13 +3296,6 @@ def calculate_review_metrics(filtered_checklists):
         if int(clean_text(entry.get("finished_place"))) in (1, 2, 3)
     ]
 
-    within_5 = [
-        entry
-        for entry in completed
-        if int(clean_text(entry.get("finished_place")))
-        in (1, 2, 3, 4, 5)
-    ]
-
     odds_values = [
         entry["odds"]
         for entry in within_3
@@ -3334,8 +3304,14 @@ def calculate_review_metrics(filtered_checklists):
 
     prize_values = [
         entry["prize"]
-        for entry in within_5
+        for entry in within_3
         if isinstance(entry.get("prize"), (int, float))
+    ]
+
+    horse_weight_values = [
+        entry["horse_weight"]
+        for entry in within_3
+        if isinstance(entry.get("horse_weight"), (int, float))
     ]
 
     return {
@@ -3356,9 +3332,14 @@ def calculate_review_metrics(filtered_checklists):
             if odds_values
             else None
         ),
-        "average_top_5_prize": (
+        "average_top_3_prize": (
             sum(prize_values) / len(prize_values)
             if prize_values
+            else None
+        ),
+        "average_top_3_weight": (
+            sum(horse_weight_values) / len(horse_weight_values)
+            if horse_weight_values
             else None
         ),
     }
@@ -4870,19 +4851,12 @@ def render_checklist_review_page():
 
     st.subheader("Review Summary")
 
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-
-    metric_col1.metric("Total Results", review_metrics["total"])
-    metric_col2.metric("Completed", review_metrics["completed"])
-    metric_col3.metric(
-        "Win Rate",
-        (
-            f"{review_metrics['win_rate']:.1f}%"
-            if review_metrics["win_rate"] is not None
-            else "N/A"
-        ),
+    summary_col1, summary_col2, summary_col3, summary_col4, summary_col5 = (
+        st.columns(5)
     )
-    metric_col4.metric(
+
+    summary_col1.metric("Total Results", review_metrics["total"])
+    summary_col2.metric(
         "Top 3 Rate",
         (
             f"{review_metrics['top_3_rate']:.1f}%"
@@ -4890,10 +4864,7 @@ def render_checklist_review_page():
             else "N/A"
         ),
     )
-
-    metric_col5, metric_col6 = st.columns(2)
-
-    metric_col5.metric(
+    summary_col3.metric(
         "Average Odds (Top 3)",
         (
             f"{review_metrics['average_top_3_odds']:.1f}"
@@ -4901,9 +4872,29 @@ def render_checklist_review_page():
             else "N/A"
         ),
     )
-    metric_col6.metric(
-        "Average Prize (Top 5)",
-        format_yen(review_metrics["average_top_5_prize"]),
+    summary_col4.metric(
+          "Win Rate",
+           (
+               f"{review_metrics['win_rate']:.1f}%"
+               if review_metrics["win_rate"] is not None
+               else "N/A"
+           ),
+    )
+    
+    summary_col5.metric(
+        "Average Prize (Top 3)",
+        format_yen(review_metrics["average_top_3_prize"]),
+    )
+
+    weight_summary_col1, weight_summary_col2 = st.columns([1, 4])
+
+    weight_summary_col1.metric(
+        "Average Weight (Top 3)",
+        (
+            f"{review_metrics['average_top_3_weight']:.1f} kg"
+            if review_metrics["average_top_3_weight"] is not None
+            else "N/A"
+        ),
     )
 
     st.subheader("Filtered Checklists")
