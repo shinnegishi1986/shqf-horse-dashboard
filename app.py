@@ -4851,24 +4851,25 @@ def render_checklist_review_page():
 
     st.subheader("Review Summary")
 
-    summary_col1, summary_col2, summary_col3, summary_col4, summary_col5 = (
-        st.columns(5)
+    summary_col1, summary_col2, summary_col3, summary_col4 = (
+        st.columns(4)
     )
 
     summary_col1.metric("Total Results", review_metrics["total"])
     summary_col2.metric(
-        "Top 3 Rate",
-        (
-            f"{review_metrics['top_3_rate']:.1f}%"
-            if review_metrics["top_3_rate"] is not None
-            else "N/A"
-        ),
-    )
-    summary_col3.metric(
         "Average Odds (Top 3)",
         (
             f"{review_metrics['average_top_3_odds']:.1f}"
             if review_metrics["average_top_3_odds"] is not None
+            else "N/A"
+        ),
+    )
+    summary_col3.metric(
+
+                "Top 3 Rate",
+        (
+            f"{review_metrics['top_3_rate']:.1f}%"
+            if review_metrics["top_3_rate"] is not None
             else "N/A"
         ),
     )
@@ -4881,12 +4882,14 @@ def render_checklist_review_page():
            ),
     )
     
+ 
+    weight_summary_col1, summary_col5 = st.columns(2)
+
     summary_col5.metric(
         "Average Prize (Top 3)",
         format_yen(review_metrics["average_top_3_prize"]),
     )
 
-    weight_summary_col1, weight_summary_col2 = st.columns([1, 4])
 
     weight_summary_col1.metric(
         "Average Weight (Top 3)",
