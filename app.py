@@ -3314,6 +3314,18 @@ def calculate_review_metrics(filtered_checklists):
         if isinstance(entry.get("horse_weight"), (int, float))
     ]
 
+    distance_values = [
+        entry["distance"]
+        for entry in within_3
+        if isinstance(entry.get("distance"), (int, float))
+    ]
+
+    interval_days_values = [
+        entry["interval_days"]
+        for entry in within_3
+        if isinstance(entry.get("interval_days"), (int, float))
+    ]
+
     return {
         "total": len(filtered_checklists),
         "completed": len(completed),
@@ -3335,6 +3347,16 @@ def calculate_review_metrics(filtered_checklists):
         "average_top_3_prize": (
             sum(prize_values) / len(prize_values)
             if prize_values
+            else None
+        ),
+        "average_top_3_distance": (
+            sum(distance_values) / len(distance_values)
+            if distance_values
+            else None
+        ),
+        "average_top_3_interval_days": (
+            sum(interval_days_values) / len(interval_days_values)
+            if interval_days_values
             else None
         ),
         "average_top_3_weight": (
@@ -4856,6 +4878,7 @@ def render_checklist_review_page():
     )
 
     summary_col1.metric("Total Results", review_metrics["total"])
+
     summary_col2.metric(
         "Average Odds (Top 3)",
         (
@@ -4864,32 +4887,33 @@ def render_checklist_review_page():
             else "N/A"
         ),
     )
-    summary_col3.metric(
 
-                "Top 3 Rate",
+    summary_col3.metric(
+        "Top 3 Rate",
         (
             f"{review_metrics['top_3_rate']:.1f}%"
             if review_metrics["top_3_rate"] is not None
             else "N/A"
         ),
     )
+
     summary_col4.metric(
-          "Win Rate",
-           (
-               f"{review_metrics['win_rate']:.1f}%"
-               if review_metrics["win_rate"] is not None
-               else "N/A"
-           ),
+        "Win Rate",
+        (
+            f"{review_metrics['win_rate']:.1f}%"
+            if review_metrics["win_rate"] is not None
+            else "N/A"
+        ),
     )
-    
- 
-    weight_summary_col1, summary_col5 = st.columns(2)
+
+    weight_summary_col1, summary_col5, distance_summary_col, interval_summary_col = (
+        st.columns(4)
+    )
 
     summary_col5.metric(
         "Average Prize (Top 3)",
         format_yen(review_metrics["average_top_3_prize"]),
     )
-
 
     weight_summary_col1.metric(
         "Average Weight (Top 3)",
@@ -4900,6 +4924,24 @@ def render_checklist_review_page():
         ),
     )
 
+    distance_summary_col.metric(
+        "Average Distance (Top 3)",
+        (
+            f"{review_metrics['average_top_3_distance']:.1f} m"
+            if review_metrics["average_top_3_distance"] is not None
+            else "N/A"
+        ),
+    )
+
+    interval_summary_col.metric(
+        "Average Days Since Last Race (Top 3)",
+        (
+            f"{review_metrics['average_top_3_interval_days']:.1f} days"
+            if review_metrics["average_top_3_interval_days"] is not None
+            else "N/A"
+        ),
+    )
+    
     st.subheader("Filtered Checklists")
 
     if first_filtered_checklists:
