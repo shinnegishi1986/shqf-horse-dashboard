@@ -2677,6 +2677,17 @@ def render_race_checklist_page():
 
     st.header("Race Checklist")
 
+    revision_key = f"race_registration_{owner_id}_revision"
+    message_key = f"race_registration_{owner_id}_message"
+    revision = st.session_state.get(revision_key, 0)
+
+    def registration_key(field_name):
+        return f"race_registration_{owner_id}_{revision}_{field_name}"
+
+    saved_message = st.session_state.pop(message_key, None)
+    if saved_message:
+        st.success(saved_message)
+
     horses = get_user_horses(owner_id)
     horse_owners = get_user_horse_owners(owner_id)
     jockeys = get_user_jockeys(owner_id)
@@ -2702,62 +2713,73 @@ def render_race_checklist_page():
     venue_options, venue_ids = make_options(venues, "venue_name")
     race_options, race_ids = make_options(race_names, "race_name")
 
-    with st.form("race_checklist_form", clear_on_submit=True):
+    with st.container():
         selected_horse_idx = st.selectbox(
             "Select Horse (optional)",
             range(len(horse_options)),
             format_func=lambda i: horse_options[i],
-        )
+           key=registration_key("selected_horse_idx"),
+       )
         selected_horse_owner_idx = st.selectbox(
             "Select Horse Owner (optional)",
             range(len(horse_owner_options)),
             format_func=lambda i: horse_owner_options[i],
-        )
+           key=registration_key("selected_horse_owner_idx"),
+       )
         selected_jockey_idx = st.selectbox(
             "Select Jockey (optional)",
             range(len(jockey_options)),
             format_func=lambda i: jockey_options[i],
-        )
+           key=registration_key("selected_jockey_idx"),
+       )
         selected_previous_jockey_idx = st.selectbox(
             "Select Previous Jockey (optional)",
             range(len(jockey_options)),
             format_func=lambda i: jockey_options[i],
-        )
+           key=registration_key("selected_previous_jockey_idx"),
+       )
         selected_trainer_idx = st.selectbox(
             "Select Trainer (optional)",
             range(len(trainer_options)),
             format_func=lambda i: trainer_options[i],
-        )
+           key=registration_key("selected_trainer_idx"),
+       )
         selected_breeding_farm_idx = st.selectbox(
             "Select Breeding Farm (optional)",
             range(len(breeding_farm_options)),
             format_func=lambda i: breeding_farm_options[i],
-        )
+           key=registration_key("selected_breeding_farm_idx"),
+       )
         selected_stallion_idx = st.selectbox(
             "Select Stallion (optional)",
             range(len(stallion_options)),
             format_func=lambda i: stallion_options[i],
-        )
+           key=registration_key("selected_stallion_idx"),
+       )
         selected_broodmare_sire_idx = st.selectbox(
             "Select Broodmare Sire (optional)",
             range(len(stallion_options)),
             format_func=lambda i: stallion_options[i],
-        )
+           key=registration_key("selected_broodmare_sire_idx"),
+       )
         selected_venue_idx = st.selectbox(
             "Select Venue (optional)",
             range(len(venue_options)),
             format_func=lambda i: venue_options[i],
-        )
+           key=registration_key("selected_venue_idx"),
+       )
         selected_previous_venue_idx = st.selectbox(
             "Select Previous Venue (optional)",
             range(len(venue_options)),
             format_func=lambda i: venue_options[i],
-        )
+           key=registration_key("selected_previous_venue_idx"),
+       )
         selected_race_idx = st.selectbox(
             "Select Race Name (optional)",
             range(len(race_options)),
             format_func=lambda i: race_options[i],
-        )
+           key=registration_key("selected_race_idx"),
+       )
 
         distance = st.number_input(
             "Distance (meters)",
@@ -2765,32 +2787,41 @@ def render_race_checklist_page():
             max_value=5000,
             value=0,
             step=100,
-        )
+           key=registration_key("distance"),
+       )
         previous_distance = st.number_input(
             "Previous Distance (meters) (optional)",
             min_value=0,
             max_value=5000,
             value=0,
             step=100,
-        )
+           key=registration_key("previous_distance"),
+       )
         date_of_race = st.date_input(
             "Date of Race",
             min_value=date(1980, 1, 1),
+            max_value=date(2100, 12, 31),
             value=date.today(),
-        )
+           key=registration_key("date_of_race"),
+       )
         previous_race_date = st.date_input(
             "Previous Race Date (optional)",
             min_value=date(1980, 1, 1),
-            max_value=date_of_race,
+            max_value=date(2100, 12, 31),
             value=None,
-        )
+           key=registration_key("previous_race_date"),
+       )
 
         interval_days_preview = calculate_interval_days(
             date_of_race,
             previous_race_date,
         )
 
-        if interval_days_preview is None:
+        if date_of_race is None:
+            st.warning("Please enter the date of race.")
+        elif previous_race_date is not None and previous_race_date > date_of_race:
+            st.warning("Previous race date cannot be after the current race date.")
+        elif interval_days_preview is None:
             st.caption(
                 "Days Since Last Race: Enter a previous race date to calculate."
             )
@@ -2810,10 +2841,11 @@ def render_race_checklist_page():
                 "For weight gain, enter the number without a + sign. "
                 "0 is saved as 0 when this field is used."
             ),
-        )
+           key=registration_key("weight_change"),
+       )
 
-        memo = st.text_area("Memo (optional)")
-        finished_place = st.text_input("Finished Place (optional)")
+        memo = st.text_area("Memo (optional)", key=registration_key("memo"))
+        finished_place = st.text_input("Finished Place (optional)", key=registration_key("finished_place"))
 
         col1, col2 = st.columns(2)
 
@@ -2823,27 +2855,31 @@ def render_race_checklist_page():
                 min_value=0,
                 max_value=12,
                 value=0,
-            )
+               key=registration_key("program_number"),
+           )
             number_of_horses = st.number_input(
                 "Number of Horses (optional) (出走頭数)",
                 min_value=0,
                 max_value=18,
                 value=0,
-            )
+               key=registration_key("number_of_horses"),
+           )
             odds = st.number_input(
                 "Odds (optional)",
                 min_value=0.0,
                 max_value=999.9,
                 value=0.0,
                 step=0.1,
-            )
+               key=registration_key("odds"),
+           )
             prize = st.number_input(
                 "Prize (optional) (¥)",
                 min_value=0.0,
                 max_value=1000000000.0,
                 value=0.0,
                 step=1000.0,
-            )
+               key=registration_key("prize"),
+           )
 
         with col2:
             bracket_number = st.number_input(
@@ -2851,29 +2887,32 @@ def render_race_checklist_page():
                 min_value=0,
                 max_value=8,
                 value=0,
-            )
+               key=registration_key("bracket_number"),
+           )
             horse_number = st.number_input(
                 "Horse Number (optional) (馬番)",
                 min_value=0,
                 max_value=18,
                 value=0,
-            )
+               key=registration_key("horse_number"),
+           )
             horse_weight = st.number_input(
                 "Horse Weight (optional) (馬体重 kg)",
                 min_value=0.0,
                 max_value=999.9,
                 value=0.0,
                 step=0.1,
-            )
+               key=registration_key("horse_weight"),
+           )
 
         st.write("Check the criteria that apply for this race (optional):")
 
         checklist_data = {}
         for criterion in criteria:
             criterion_name = criterion["criteria_name"]
-            checklist_data[criterion_name] = st.checkbox(criterion_name)
+            checklist_data[criterion_name] = st.checkbox(criterion_name, key=registration_key(f"criterion_{criterion['id']}"))
 
-        save_clicked = st.form_submit_button("Save Checklist")
+        save_clicked = st.button("Save Checklist", key=registration_key("save_clicked"))
 
     if save_clicked:
         normalized_date_of_race = normalize_date(date_of_race)
@@ -2941,7 +2980,9 @@ def render_race_checklist_page():
             )
 
             if success:
-                st.success(message)
+                st.session_state[message_key] = message
+                st.session_state[revision_key] = revision + 1
+                st.rerun()
             else:
                 st.error(message)
 
@@ -4878,7 +4919,6 @@ def render_checklist_review_page():
     )
 
     summary_col1.metric("Total Results", review_metrics["total"])
-
     summary_col2.metric(
         "Average Odds (Top 3)",
         (
@@ -4887,25 +4927,25 @@ def render_checklist_review_page():
             else "N/A"
         ),
     )
-
     summary_col3.metric(
-        "Top 3 Rate",
+
+                "Top 3 Rate",
         (
             f"{review_metrics['top_3_rate']:.1f}%"
             if review_metrics["top_3_rate"] is not None
             else "N/A"
         ),
     )
-
     summary_col4.metric(
-        "Win Rate",
-        (
-            f"{review_metrics['win_rate']:.1f}%"
-            if review_metrics["win_rate"] is not None
-            else "N/A"
-        ),
+          "Win Rate",
+           (
+               f"{review_metrics['win_rate']:.1f}%"
+               if review_metrics["win_rate"] is not None
+               else "N/A"
+           ),
     )
-
+    
+ 
     weight_summary_col1, summary_col5, distance_summary_col, interval_summary_col = (
         st.columns(4)
     )
@@ -4914,6 +4954,7 @@ def render_checklist_review_page():
         "Average Prize (Top 3)",
         format_yen(review_metrics["average_top_3_prize"]),
     )
+
 
     weight_summary_col1.metric(
         "Average Weight (Top 3)",
@@ -4941,7 +4982,7 @@ def render_checklist_review_page():
             else "N/A"
         ),
     )
-    
+
     st.subheader("Filtered Checklists")
 
     if first_filtered_checklists:
