@@ -525,6 +525,7 @@ def get_filter_defaults():
         "previous_distance_to": 5000,
         "interval_days_from": 0,
         "interval_days_to": 9999,
+        "enable_weight_change_filter": False,
         "weight_change_from": -999.9,
         "weight_change_to": 999.9,
         "date_from": None,
@@ -1328,6 +1329,9 @@ def collect_current_filter_data(owner_id):
         "previous_distance_to": get_value("previous_distance_to", 5000),
         "interval_days_from": get_value("interval_days_from", 0),
         "interval_days_to": get_value("interval_days_to", 9999),
+        "enable_weight_change_filter": get_value(
+            "enable_weight_change_filter", False
+        ),
         "weight_change_from": get_value("weight_change_from", -999.9),
         "weight_change_to": get_value("weight_change_to", 999.9),
         "date_from": date_from.isoformat() if isinstance(date_from, date) else None,
@@ -1406,12 +1410,24 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=""):
         int(filter_data.get("interval_days_to", 9999) or 9999),
     )
     set_value(
+        "enable_weight_change_filter",
+        bool(filter_data.get("enable_weight_change_filter", False)),
+    )
+    set_value(
         "weight_change_from",
-        float(filter_data.get("weight_change_from", -999.9) or -999.9),
+        float(
+            filter_data.get("weight_change_from")
+            if filter_data.get("weight_change_from") is not None
+            else -999.9
+        ),
     )
     set_value(
         "weight_change_to",
-        float(filter_data.get("weight_change_to", 999.9) or 999.9),
+        float(
+            filter_data.get("weight_change_to")
+            if filter_data.get("weight_change_to") is not None
+            else 999.9
+        ),
     )
     set_value("date_from", date_from)
     set_value("date_to", date_to)
@@ -3097,6 +3113,7 @@ def filter_checklists(
     enable_weight_filter,
     weight_from,
     weight_to,
+    enable_weight_change_filter=False,
 ):
     filtered = []
 
@@ -3174,16 +3191,17 @@ def filter_checklists(
         ):
             continue
 
-        weight_change_value = entry.get("weight_change")
+        if enable_weight_change_filter:
+            weight_change_value = entry.get("weight_change")
 
-        if weight_change_value is None:
-            if weight_change_from > -999.9 or weight_change_to < 999.9:
+            if weight_change_value is None:
                 continue
-        elif (
-            weight_change_value < weight_change_from
-            or weight_change_value > weight_change_to
-        ):
-            continue
+
+            if (
+                weight_change_value < weight_change_from
+                or weight_change_value > weight_change_to
+            ):
+                continue
 
         if memo_keyword.strip():
             keyword = memo_keyword.strip().lower()
@@ -4040,12 +4058,24 @@ def render_second_filter_section(
             key=second_filter_key(owner_id, "interval_days_to"),
         )
 
+        second_filter_enable_weight_change_filter = st.checkbox(
+            "Apply Second Weight Change Filter",
+            key=second_filter_key(
+                owner_id, "enable_weight_change_filter"
+            ),
+            help=(
+                "Check to apply the From/To weight-change range. "
+                "Unchecked means weight change is ignored."
+            ),
+        )
+
         second_filter_weight_change_from = st.number_input(
             "Second Filter From Weight Change (kg)",
             min_value=-999.9,
             max_value=999.9,
             step=0.1,
             key=second_filter_key(owner_id, "weight_change_from"),
+            disabled=not second_filter_enable_weight_change_filter,
         )
 
         second_filter_weight_change_to = st.number_input(
@@ -4054,6 +4084,7 @@ def render_second_filter_section(
             max_value=999.9,
             step=0.1,
             key=second_filter_key(owner_id, "weight_change_to"),
+            disabled=not second_filter_enable_weight_change_filter,
         )
 
         second_filter_date_from = st.date_input(
@@ -4168,6 +4199,7 @@ def render_second_filter_section(
         previous_distance_to=second_filter_previous_distance_to,
         interval_days_from=second_filter_interval_days_from,
         interval_days_to=second_filter_interval_days_to,
+        enable_weight_change_filter=second_filter_enable_weight_change_filter,
         weight_change_from=second_filter_weight_change_from,
         weight_change_to=second_filter_weight_change_to,
         date_from=second_filter_date_from,
@@ -4198,6 +4230,291 @@ def render_second_filter_section(
 # -------------------------------------------------
 # Checklist Review
 # -------------------------------------------------
+
+# CHECKLIST_REVIEW_STACKED_COUNT_CHARTS_V1
+def _review_count_chart_rows(counts, labels, total, top_limit=20):
+    import heapq
+
+    if total <= 0:
+        return []
+
+    ranked = heapq.nsmallest(
+        top_limit,
+        counts.items(),
+        key=lambda item: (
+            -item[1],
+            labels[item[0]].casefold(),
+            repr(item[0]),
+        ),
+    )
+
+    rows = []
+    shown_count = 0
+
+    for order, (category_key, count) in enumerate(ranked):
+        label = labels[category_key]
+
+        # Unique legend keys keep identically named entities separate.
+        legend_key = f"{order + 1}. {label}"
+
+        rows.append(
+            {
+                "bar": "Share of selected records",
+                "category": label,
+                "legend_key": legend_key,
+                "count": count,
+                "share": count / total,
+                "order": order,
+            }
+        )
+        shown_count += count
+
+    remainder = total - shown_count
+
+    if remainder > 0:
+        rows.append(
+            {
+                "bar": "Share of selected records",
+                "category": "Other (remaining categories)",
+                "legend_key": "Other (remaining categories)",
+                "count": remainder,
+                "share": remainder / total,
+                "order": len(rows),
+            }
+        )
+
+    return rows
+
+
+def _render_review_stacked_count_chart(title, rows, total, category_count):
+    st.markdown(f"### {title}")
+
+    if not rows:
+        st.info("No matching records to chart.")
+        return
+
+    largest = rows[0]
+
+    st.caption(
+        f"{total:,} checklist record(s) across {category_count:,} categories. "
+        f"Largest: {largest['category']} — "
+        f"{largest['count']:,} ({largest['share']:.1%})."
+    )
+
+    domain = [row["legend_key"] for row in rows]
+
+    palette = [
+        "#2563EB", "#F97316", "#10B981", "#EF4444", "#8B5CF6",
+        "#06B6D4", "#D97706", "#DB2777", "#65A30D", "#4F46E5",
+        "#0D9488", "#DC2626", "#9333EA", "#0284C7", "#CA8A04",
+        "#BE185D", "#16A34A", "#7C3AED", "#0891B2", "#EA580C",
+    ]
+
+    colors = [
+        "#9CA3AF"
+        if row["category"] == "Other (remaining categories)"
+        else palette[index % len(palette)]
+        for index, row in enumerate(rows)
+    ]
+
+    spec = {
+        "height": 85,
+        "mark": {
+            "type": "bar",
+            "size": 42,
+        },
+        "encoding": {
+            "x": {
+                "field": "count",
+                "type": "quantitative",
+                "stack": "zero",
+                "scale": {
+                    "domain": [0, total],
+                    "nice": False,
+                },
+                "axis": {
+                    "title": "Checklist record count",
+                    "format": ",.0f",
+                    "tickMinStep": 1,
+                    "grid": False,
+                },
+            },
+            "y": {
+                "field": "bar",
+                "type": "nominal",
+                "axis": None,
+            },
+            "color": {
+                "field": "legend_key",
+                "type": "nominal",
+                "scale": {
+                    "domain": domain,
+                    "range": colors,
+                },
+                "legend": {
+                    "title": None,
+                    "orient": "bottom",
+                    "direction": "horizontal",
+                    "columns": 2,
+                    "labelLimit": 250,
+                    "symbolType": "square",
+                },
+            },
+            "order": {
+                "field": "order",
+                "type": "quantitative",
+                "sort": "ascending",
+            },
+            "tooltip": [
+                {
+                    "field": "category",
+                    "type": "nominal",
+                    "title": "Category",
+                },
+                {
+                    "field": "count",
+                    "type": "quantitative",
+                    "title": "Record count",
+                    "format": ",.0f",
+                },
+                {
+                    "field": "share",
+                    "type": "quantitative",
+                    "title": "Share",
+                    "format": ".1%",
+                },
+            ],
+        },
+        "config": {
+            "view": {"stroke": None},
+        },
+    }
+
+    st.vega_lite_chart(
+        pd.DataFrame(rows),
+        spec=spec,
+        use_container_width=True,
+    )
+
+
+def render_review_stacked_count_charts(
+    owner_id,
+    first_filtered_checklists,
+    second_filtered_checklists=None,
+    second_filter_enabled=False,
+):
+    from collections import Counter
+
+    st.subheader("Venue and Jockey Dominance")
+
+    show_charts = st.checkbox(
+        "Show venue and jockey count charts",
+        value=True,
+        key=f"review_stacked_count_charts_visible_{owner_id}",
+    )
+
+    if not show_charts:
+        return
+
+    use_second_filter = False
+
+    if second_filter_enabled:
+        use_second_filter = st.checkbox(
+            "Use second-filter results for these charts",
+            value=False,
+            key=f"review_stacked_count_charts_second_filter_{owner_id}",
+        )
+
+    if use_second_filter:
+        records = (
+            second_filtered_checklists
+            if second_filtered_checklists is not None
+            else []
+        )
+        scope = "Second-filter results"
+    else:
+        records = first_filtered_checklists
+        scope = "First-filter results"
+
+    st.caption(
+        f"Scope: {scope}, before pagination. "
+        "Each checklist contributes one venue count and one jockey count. "
+        "These charts show record concentration, not win rates. "
+        "Largest individual category is at the left; "
+        "smaller categories follow. Any combined Other segment is last."
+    )
+
+    total = len(records)
+
+    if total == 0:
+        st.info("No matching checklist records for the selected chart scope.")
+        return
+
+    venue_counts = Counter()
+    jockey_counts = Counter()
+    venue_labels = {}
+    jockey_labels = {}
+
+    for entry in records:
+        venue_id = entry.get("venue_id")
+        venue_name = clean_text(entry.get("venue_name"))
+
+        if venue_id is not None:
+            venue_key = ("id", venue_id)
+            venue_label = venue_name or f"Venue #{venue_id}"
+        elif venue_name and venue_name != "No venue selected":
+            venue_key = ("name", venue_name)
+            venue_label = venue_name
+        else:
+            venue_key = ("missing",)
+            venue_label = "(No venue selected)"
+
+        venue_counts[venue_key] += 1
+        venue_labels[venue_key] = venue_label
+
+        jockey_id = entry.get("jockey_id")
+        jockey_name = clean_text(entry.get("jockey_name"))
+
+        if jockey_id is not None:
+            jockey_key = ("id", jockey_id)
+            jockey_label = jockey_name or f"Jockey #{jockey_id}"
+        elif jockey_name and jockey_name != "No jockey selected":
+            jockey_key = ("name", jockey_name)
+            jockey_label = jockey_name
+        else:
+            jockey_key = ("missing",)
+            jockey_label = "(No jockey selected)"
+
+        jockey_counts[jockey_key] += 1
+        jockey_labels[jockey_key] = jockey_label
+
+    venue_rows = _review_count_chart_rows(
+        venue_counts,
+        venue_labels,
+        total,
+    )
+
+    jockey_rows = _review_count_chart_rows(
+        jockey_counts,
+        jockey_labels,
+        total,
+    )
+
+    _render_review_stacked_count_chart(
+        "Venue Count",
+        venue_rows,
+        total,
+        len(venue_counts),
+    )
+
+    _render_review_stacked_count_chart(
+        "Jockey Count",
+        jockey_rows,
+        total,
+        len(jockey_counts),
+    )
+
+
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
 
@@ -4651,6 +4968,17 @@ def render_checklist_review_page():
                 key=saved_filter_key(owner_id, "interval_days_to"),
             )
 
+            filter_enable_weight_change_filter = st.checkbox(
+                "Apply Weight Change Filter",
+                key=saved_filter_key(
+                    owner_id, "enable_weight_change_filter"
+                ),
+                help=(
+                    "Check to apply the From/To weight-change range. "
+                    "Unchecked means weight change is ignored."
+                ),
+            )
+
             filter_weight_change_from = st.number_input(
                 "From Weight Change (kg)",
                 min_value=-999.9,
@@ -4661,6 +4989,7 @@ def render_checklist_review_page():
                     "Positive values are entered without a + sign."
                 ),
                 key=saved_filter_key(owner_id, "weight_change_from"),
+                disabled=not filter_enable_weight_change_filter,
             )
 
             filter_weight_change_to = st.number_input(
@@ -4669,6 +4998,7 @@ def render_checklist_review_page():
                 max_value=999.9,
                 step=0.1,
                 key=saved_filter_key(owner_id, "weight_change_to"),
+                disabled=not filter_enable_weight_change_filter,
             )
 
             filter_date_from = st.date_input(
@@ -4818,6 +5148,7 @@ def render_checklist_review_page():
         previous_distance_to=filter_previous_distance_to,
         interval_days_from=filter_interval_days_from,
         interval_days_to=filter_interval_days_to,
+        enable_weight_change_filter=filter_enable_weight_change_filter,
         weight_change_from=filter_weight_change_from,
         weight_change_to=filter_weight_change_to,
         date_from=filter_date_from,
@@ -4909,6 +5240,14 @@ def render_checklist_review_page():
             f"{dominance_percentage:.1f}%. "
             "The results list below still shows all first-filter results."
         )
+
+
+    render_review_stacked_count_charts(
+        owner_id=owner_id,
+        first_filtered_checklists=first_filtered_checklists,
+        second_filtered_checklists=second_filtered_checklists,
+        second_filter_enabled=second_filter_enabled,
+    )
 
     review_metrics = calculate_review_metrics(first_filtered_checklists)
 
@@ -5299,3 +5638,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Optional weight-change filtering enabled.
