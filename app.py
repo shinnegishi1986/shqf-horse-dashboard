@@ -4287,6 +4287,7 @@ def _review_count_chart_rows(counts, labels, total, top_limit=20):
 
 
 # APPLE_TOUCH_STACKED_CHART_TOOLTIP_V1
+# STACKED_BAR_CHART_TEXT_CONTRAST_V1
 def _render_review_stacked_count_chart(title, rows, total, category_count):
     import json
     import math
@@ -4365,36 +4366,36 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
     :root {
-        color-scheme: light dark;
-        --foreground: #172033;
-        --background: #ffffff;
-        --border: #d1d5db;
-        --muted: #64748b;
+        color-scheme: dark;
+        --foreground: #f8fafc;
+        --background: #111827;
+        --border: #94a3b8;
+        --muted: #cbd5e1;
     }
 
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --foreground: #f1f5f9;
-            --background: #172033;
-            --border: #64748b;
-            --muted: #cbd5e1;
-        }
+    * {
+        box-sizing: border-box;
     }
 
-    * { box-sizing: border-box; }
+    html {
+        color: #f8fafc !important;
+        background: #111827 !important;
+    }
 
     body {
         margin: 0;
-        padding: 8px 6px;
+        padding: 10px 8px;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         font-size: 13px;
-        color: var(--foreground);
-        background: transparent;
+        color: #f8fafc !important;
+        background: #111827 !important;
+        -webkit-text-fill-color: #f8fafc;
     }
 
     .hint {
         margin: 0 0 12px;
-        color: var(--muted);
+        color: #cbd5e1 !important;
+        -webkit-text-fill-color: #cbd5e1 !important;
         font-size: 12px;
     }
 
@@ -4404,7 +4405,7 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         height: 48px;
         overflow: hidden;
         border-radius: 6px;
-        background: #e5e7eb;
+        background: #334155;
     }
 
     .segment {
@@ -4426,7 +4427,7 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
     .segment:hover,
     .segment:focus-visible,
     .segment.selected {
-        box-shadow: inset 0 0 0 3px var(--foreground);
+        box-shadow: inset 0 0 0 3px #ffffff;
         outline: none;
     }
 
@@ -4435,8 +4436,13 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         justify-content: space-between;
         gap: 8px;
         margin-top: 7px;
-        color: var(--muted);
+        color: #cbd5e1 !important;
         font-size: 11px;
+    }
+
+    .axis span {
+        color: #cbd5e1 !important;
+        -webkit-text-fill-color: #cbd5e1 !important;
     }
 
     .legend {
@@ -4448,6 +4454,9 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         overflow-y: auto;
         overscroll-behavior: contain;
         padding: 3px;
+        color: #f8fafc !important;
+        background: #111827 !important;
+        scrollbar-color: #64748b #111827;
     }
 
     .legend-item {
@@ -4459,16 +4468,23 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         border: 0;
         border-radius: 4px;
         font: inherit;
-        color: inherit;
-        background: transparent;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+        background: #111827 !important;
         text-align: left;
         cursor: pointer;
         touch-action: manipulation;
+        opacity: 1;
+    }
+
+    .legend-item:hover {
+        background: #1e293b !important;
     }
 
     .legend-item:focus-visible {
-        outline: 2px solid var(--foreground);
+        outline: 2px solid #ffffff;
         outline-offset: -2px;
+        background: #1e293b !important;
     }
 
     .swatch {
@@ -4483,6 +4499,8 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         text-overflow: ellipsis;
         white-space: nowrap;
         font-size: 12px;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
     }
 
     #tooltip {
@@ -4490,18 +4508,27 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
         z-index: 1000;
         max-width: min(300px, calc(100vw - 16px));
         padding: 11px 13px;
-        border: 1px solid var(--border);
+        border: 1px solid #94a3b8;
         border-radius: 11px;
-        color: var(--foreground);
-        background: var(--background);
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.24);
+        color: #f8fafc !important;
+        background: #1e293b !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
         pointer-events: none;
         overflow-wrap: anywhere;
         font-size: 13px;
         line-height: 1.5;
     }
 
-    #tooltip[hidden] { display: none; }
+    #tooltip[hidden] {
+        display: none;
+    }
+
+    #tooltip-title,
+    #tooltip-count,
+    #tooltip-share {
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
+    }
 
     .tooltip-title {
         font-weight: 700;
@@ -4511,7 +4538,8 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
     .tooltip-note {
         margin-top: 4px;
         font-size: 11px;
-        color: var(--muted);
+        color: #cbd5e1 !important;
+        -webkit-text-fill-color: #cbd5e1 !important;
     }
 </style>
 </head>
