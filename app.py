@@ -4761,6 +4761,7 @@ document.addEventListener("scroll", function() {
 
 
 
+# TRAINER_STALLION_STACKED_COUNT_CHARTS_V1
 def render_review_stacked_count_charts(
     owner_id,
     first_filtered_checklists,
@@ -4769,10 +4770,10 @@ def render_review_stacked_count_charts(
 ):
     from collections import Counter
 
-    st.subheader("Venue and Jockey Dominance")
+    st.subheader("Venue, Jockey, Trainer and Stallion Dominance")
 
     show_charts = st.checkbox(
-        "Show venue and jockey count charts",
+        "Show venue, jockey, trainer and stallion count charts",
         value=True,
         key=f"review_stacked_count_charts_visible_{owner_id}",
     )
@@ -4802,7 +4803,9 @@ def render_review_stacked_count_charts(
 
     st.caption(
         f"Scope: {scope}, before pagination. "
-        "Each checklist contributes one venue count and one jockey count. "
+        "Each checklist contributes one count to each chart: "
+        "venue, jockey, trainer and stallion. "
+        "Missing selections are included as separate categories. "
         "These charts show record concentration, not win rates. "
         "Largest individual category is at the left; "
         "smaller categories follow. Any combined Other segment is last."
@@ -4816,8 +4819,12 @@ def render_review_stacked_count_charts(
 
     venue_counts = Counter()
     jockey_counts = Counter()
+    trainer_counts = Counter()
+    stallion_counts = Counter()
     venue_labels = {}
     jockey_labels = {}
+    trainer_labels = {}
+    stallion_labels = {}
 
     for entry in records:
         venue_id = entry.get("venue_id")
@@ -4852,6 +4859,39 @@ def render_review_stacked_count_charts(
         jockey_counts[jockey_key] += 1
         jockey_labels[jockey_key] = jockey_label
 
+        trainer_id = entry.get("trainer_id")
+        trainer_name = clean_text(entry.get("trainer_name"))
+
+        if trainer_id is not None:
+            trainer_key = ("id", trainer_id)
+            trainer_label = trainer_name or f"Trainer #{trainer_id}"
+        elif trainer_name and trainer_name != "No trainer selected":
+            trainer_key = ("name", trainer_name)
+            trainer_label = trainer_name
+        else:
+            trainer_key = ("missing",)
+            trainer_label = "(No trainer selected)"
+
+        trainer_counts[trainer_key] += 1
+        trainer_labels[trainer_key] = trainer_label
+
+        # Use the stallion field, not broodmare_sire_id.
+        stallion_id = entry.get("stallion_id")
+        stallion_name = clean_text(entry.get("stallion_name"))
+
+        if stallion_id is not None:
+            stallion_key = ("id", stallion_id)
+            stallion_label = stallion_name or f"Stallion #{stallion_id}"
+        elif stallion_name and stallion_name != "No stallion selected":
+            stallion_key = ("name", stallion_name)
+            stallion_label = stallion_name
+        else:
+            stallion_key = ("missing",)
+            stallion_label = "(No stallion selected)"
+
+        stallion_counts[stallion_key] += 1
+        stallion_labels[stallion_key] = stallion_label
+
     venue_rows = _review_count_chart_rows(
         venue_counts,
         venue_labels,
@@ -4861,6 +4901,18 @@ def render_review_stacked_count_charts(
     jockey_rows = _review_count_chart_rows(
         jockey_counts,
         jockey_labels,
+        total,
+    )
+
+    trainer_rows = _review_count_chart_rows(
+        trainer_counts,
+        trainer_labels,
+        total,
+    )
+
+    stallion_rows = _review_count_chart_rows(
+        stallion_counts,
+        stallion_labels,
         total,
     )
 
@@ -4876,6 +4928,20 @@ def render_review_stacked_count_charts(
         jockey_rows,
         total,
         len(jockey_counts),
+    )
+
+    _render_review_stacked_count_chart(
+        "Trainer Count",
+        trainer_rows,
+        total,
+        len(trainer_counts),
+    )
+
+    _render_review_stacked_count_chart(
+        "Stallion Count",
+        stallion_rows,
+        total,
+        len(stallion_counts),
     )
 
 
