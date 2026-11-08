@@ -2688,22 +2688,95 @@ def render_template_page(template_type, title, input_label):
                         st.error(message)
 
 
+# RACE_CHECKLIST_ACCEPT_NEW_REFERENCE_NAMES_V1
+def render_race_reference_input(label, existing_options, key):
+    import inspect
+
+    # make_options() puts "(No selection)" at index zero.
+    names = [
+        clean_text(value)
+        for value in existing_options[1:]
+        if clean_text(value)
+    ]
+
+    try:
+        supports_new_options = (
+            "accept_new_options"
+            in inspect.signature(st.selectbox).parameters
+        )
+    except (TypeError, ValueError):
+        supports_new_options = False
+
+    if supports_new_options:
+        selected_name = st.selectbox(
+            label,
+            options=names,
+            index=None,
+            key=key,
+            accept_new_options=True,
+            placeholder="Select a registered name or type a new name",
+            help=(
+                "Registered names remain available as suggestions. "
+                "A new name is registered when you save the checklist."
+            ),
+        )
+
+        return clean_text(selected_name)
+
+    selected_name = st.selectbox(
+        label,
+        options=[None] + names,
+        index=0,
+        format_func=lambda value: (
+            value if value is not None else "(No selection)"
+        ),
+        key=key,
+    )
+
+    new_name = st.text_input(
+        f"New name for {label}",
+        key=f"{key}_new_name",
+        help=(
+            "Optional. Enter a name that is not listed above. "
+            "If entered, this name takes priority over the selected name."
+        ),
+    )
+
+    return clean_text(new_name) or clean_text(selected_name)
+
+
+def resolve_race_reference_input(template_type, owner_id, value):
+    name = clean_text(value)
+
+    if not name:
+        return None
+
+    item_id = find_or_create_template_item(
+        template_type,
+        owner_id,
+        name,
+    )
+
+    if item_id is None:
+        raise ValueError(
+            f"Could not register or find {template_type.replace('_', ' ')}: "
+            f"{name}. Please try again."
+        )
+
+    return item_id
+
 def render_race_checklist_page():
     owner_id = st.session_state.user_id
-
-    st.header("Race Checklist")
-
-    revision_key = f"race_registration_{owner_id}_revision"
-    message_key = f"race_registration_{owner_id}_message"
+    st.header('Race Checklist')
+    revision_key = f'race_registration_{owner_id}_revision'
+    message_key = f'race_registration_{owner_id}_message'
     revision = st.session_state.get(revision_key, 0)
 
     def registration_key(field_name):
-        return f"race_registration_{owner_id}_{revision}_{field_name}"
-
+        return f'race_registration_{owner_id}_{revision}_{field_name}'
     saved_message = st.session_state.pop(message_key, None)
     if saved_message:
         st.success(saved_message)
-
     horses = get_user_horses(owner_id)
     horse_owners = get_user_horse_owners(owner_id)
     jockeys = get_user_jockeys(owner_id)
@@ -2713,296 +2786,80 @@ def render_race_checklist_page():
     venues = get_user_venues(owner_id)
     race_names = get_user_race_names(owner_id)
     criteria = get_user_criteria(owner_id)
-
-    horse_options, horse_ids = make_options(horses, "horse_name")
-    horse_owner_options, horse_owner_ids = make_options(
-        horse_owners,
-        "horse_owner_name",
-    )
-    jockey_options, jockey_ids = make_options(jockeys, "jockey_name")
-    trainer_options, trainer_ids = make_options(trainers, "trainer_name")
-    breeding_farm_options, breeding_farm_ids = make_options(
-        breeding_farms,
-        "breeding_farm_name",
-    )
-    stallion_options, stallion_ids = make_options(stallions, "stallion_name")
-    venue_options, venue_ids = make_options(venues, "venue_name")
-    race_options, race_ids = make_options(race_names, "race_name")
-
+    horse_options, horse_ids = make_options(horses, 'horse_name')
+    horse_owner_options, horse_owner_ids = make_options(horse_owners, 'horse_owner_name')
+    jockey_options, jockey_ids = make_options(jockeys, 'jockey_name')
+    trainer_options, trainer_ids = make_options(trainers, 'trainer_name')
+    breeding_farm_options, breeding_farm_ids = make_options(breeding_farms, 'breeding_farm_name')
+    stallion_options, stallion_ids = make_options(stallions, 'stallion_name')
+    venue_options, venue_ids = make_options(venues, 'venue_name')
+    race_options, race_ids = make_options(race_names, 'race_name')
     with st.container():
-        selected_horse_idx = st.selectbox(
-            "Select Horse (optional)",
-            range(len(horse_options)),
-            format_func=lambda i: horse_options[i],
-           key=registration_key("selected_horse_idx"),
-       )
-        selected_horse_owner_idx = st.selectbox(
-            "Select Horse Owner (optional)",
-            range(len(horse_owner_options)),
-            format_func=lambda i: horse_owner_options[i],
-           key=registration_key("selected_horse_owner_idx"),
-       )
-        selected_jockey_idx = st.selectbox(
-            "Select Jockey (optional)",
-            range(len(jockey_options)),
-            format_func=lambda i: jockey_options[i],
-           key=registration_key("selected_jockey_idx"),
-       )
-        selected_previous_jockey_idx = st.selectbox(
-            "Select Previous Jockey (optional)",
-            range(len(jockey_options)),
-            format_func=lambda i: jockey_options[i],
-           key=registration_key("selected_previous_jockey_idx"),
-       )
-        selected_trainer_idx = st.selectbox(
-            "Select Trainer (optional)",
-            range(len(trainer_options)),
-            format_func=lambda i: trainer_options[i],
-           key=registration_key("selected_trainer_idx"),
-       )
-        selected_breeding_farm_idx = st.selectbox(
-            "Select Breeding Farm (optional)",
-            range(len(breeding_farm_options)),
-            format_func=lambda i: breeding_farm_options[i],
-           key=registration_key("selected_breeding_farm_idx"),
-       )
-        selected_stallion_idx = st.selectbox(
-            "Select Stallion (optional)",
-            range(len(stallion_options)),
-            format_func=lambda i: stallion_options[i],
-           key=registration_key("selected_stallion_idx"),
-       )
-        selected_broodmare_sire_idx = st.selectbox(
-            "Select Broodmare Sire (optional)",
-            range(len(stallion_options)),
-            format_func=lambda i: stallion_options[i],
-           key=registration_key("selected_broodmare_sire_idx"),
-       )
-        selected_venue_idx = st.selectbox(
-            "Select Venue (optional)",
-            range(len(venue_options)),
-            format_func=lambda i: venue_options[i],
-           key=registration_key("selected_venue_idx"),
-       )
-        selected_previous_venue_idx = st.selectbox(
-            "Select Previous Venue (optional)",
-            range(len(venue_options)),
-            format_func=lambda i: venue_options[i],
-           key=registration_key("selected_previous_venue_idx"),
-       )
-        selected_race_idx = st.selectbox(
-            "Select Race Name (optional)",
-            range(len(race_options)),
-            format_func=lambda i: race_options[i],
-           key=registration_key("selected_race_idx"),
-       )
-
-        distance = st.number_input(
-            "Distance (meters)",
-            min_value=0,
-            max_value=5000,
-            value=0,
-            step=100,
-           key=registration_key("distance"),
-       )
-        previous_distance = st.number_input(
-            "Previous Distance (meters) (optional)",
-            min_value=0,
-            max_value=5000,
-            value=0,
-            step=100,
-           key=registration_key("previous_distance"),
-       )
-        date_of_race = st.date_input(
-            "Date of Race",
-            min_value=date(1980, 1, 1),
-            max_value=date(2100, 12, 31),
-            value=date.today(),
-           key=registration_key("date_of_race"),
-       )
-        previous_race_date = st.date_input(
-            "Previous Race Date (optional)",
-            min_value=date(1980, 1, 1),
-            max_value=date(2100, 12, 31),
-            value=None,
-           key=registration_key("previous_race_date"),
-       )
-
-        interval_days_preview = calculate_interval_days(
-            date_of_race,
-            previous_race_date,
-        )
-
+        selected_horse_idx = render_race_reference_input('Select Horse (optional)', horse_options, key=registration_key('selected_horse_idx') + '_accept_name')
+        selected_horse_owner_idx = render_race_reference_input('Select Horse Owner (optional)', horse_owner_options, key=registration_key('selected_horse_owner_idx') + '_accept_name')
+        selected_jockey_idx = render_race_reference_input('Select Jockey (optional)', jockey_options, key=registration_key('selected_jockey_idx') + '_accept_name')
+        selected_previous_jockey_idx = render_race_reference_input('Select Previous Jockey (optional)', jockey_options, key=registration_key('selected_previous_jockey_idx') + '_accept_name')
+        selected_trainer_idx = render_race_reference_input('Select Trainer (optional)', trainer_options, key=registration_key('selected_trainer_idx') + '_accept_name')
+        selected_breeding_farm_idx = render_race_reference_input('Select Breeding Farm (optional)', breeding_farm_options, key=registration_key('selected_breeding_farm_idx') + '_accept_name')
+        selected_stallion_idx = render_race_reference_input('Select Stallion (optional)', stallion_options, key=registration_key('selected_stallion_idx') + '_accept_name')
+        selected_broodmare_sire_idx = render_race_reference_input('Select Broodmare Sire (optional)', stallion_options, key=registration_key('selected_broodmare_sire_idx') + '_accept_name')
+        selected_venue_idx = render_race_reference_input('Select Venue (optional)', venue_options, key=registration_key('selected_venue_idx') + '_accept_name')
+        selected_previous_venue_idx = render_race_reference_input('Select Previous Venue (optional)', venue_options, key=registration_key('selected_previous_venue_idx') + '_accept_name')
+        selected_race_idx = render_race_reference_input('Select Race Name (optional)', race_options, key=registration_key('selected_race_idx') + '_accept_name')
+        distance = st.number_input('Distance (meters)', min_value=0, max_value=5000, value=0, step=100, key=registration_key('distance'))
+        previous_distance = st.number_input('Previous Distance (meters) (optional)', min_value=0, max_value=5000, value=0, step=100, key=registration_key('previous_distance'))
+        date_of_race = st.date_input('Date of Race', min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), value=date.today(), key=registration_key('date_of_race'))
+        previous_race_date = st.date_input('Previous Race Date (optional)', min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), value=None, key=registration_key('previous_race_date'))
+        interval_days_preview = calculate_interval_days(date_of_race, previous_race_date)
         if date_of_race is None:
-            st.warning("Please enter the date of race.")
+            st.warning('Please enter the date of race.')
         elif previous_race_date is not None and previous_race_date > date_of_race:
-            st.warning("Previous race date cannot be after the current race date.")
+            st.warning('Previous race date cannot be after the current race date.')
         elif interval_days_preview is None:
-            st.caption(
-                "Days Since Last Race: Enter a previous race date to calculate."
-            )
+            st.caption('Days Since Last Race: Enter a previous race date to calculate.')
         else:
-            st.info(
-                f"Days Since Last Race: {interval_days_preview} day(s)"
-            )
-
-        weight_change = st.number_input(
-            "Weight Change (kg) (optional)",
-            min_value=-999.9,
-            max_value=999.9,
-            value=0.0,
-            step=0.1,
-            help=(
-                "Enter a negative value for weight loss. "
-                "For weight gain, enter the number without a + sign. "
-                "0 is saved as 0 when this field is used."
-            ),
-           key=registration_key("weight_change"),
-       )
-
-        memo = st.text_area("Memo (optional)", key=registration_key("memo"))
-        finished_place = st.text_input("Finished Place (optional)", key=registration_key("finished_place"))
-
+            st.info(f'Days Since Last Race: {interval_days_preview} day(s)')
+        weight_change = st.number_input('Weight Change (kg) (optional)', min_value=-999.9, max_value=999.9, value=0.0, step=0.1, help='Enter a negative value for weight loss. For weight gain, enter the number without a + sign. 0 is saved as 0 when this field is used.', key=registration_key('weight_change'))
+        memo = st.text_area('Memo (optional)', key=registration_key('memo'))
+        finished_place = st.text_input('Finished Place (optional)', key=registration_key('finished_place'))
         col1, col2 = st.columns(2)
-
         with col1:
-            program_number = st.number_input(
-                "Program Number (optional) (レース番号)",
-                min_value=0,
-                max_value=12,
-                value=0,
-               key=registration_key("program_number"),
-           )
-            number_of_horses = st.number_input(
-                "Number of Horses (optional) (出走頭数)",
-                min_value=0,
-                max_value=18,
-                value=0,
-               key=registration_key("number_of_horses"),
-           )
-            odds = st.number_input(
-                "Odds (optional)",
-                min_value=0.0,
-                max_value=999.9,
-                value=0.0,
-                step=0.1,
-               key=registration_key("odds"),
-           )
-            prize = st.number_input(
-                "Prize (optional) (¥)",
-                min_value=0.0,
-                max_value=1000000000.0,
-                value=0.0,
-                step=1000.0,
-               key=registration_key("prize"),
-           )
-
+            program_number = st.number_input('Program Number (optional) (レース番号)', min_value=0, max_value=12, value=0, key=registration_key('program_number'))
+            number_of_horses = st.number_input('Number of Horses (optional) (出走頭数)', min_value=0, max_value=18, value=0, key=registration_key('number_of_horses'))
+            odds = st.number_input('Odds (optional)', min_value=0.0, max_value=999.9, value=0.0, step=0.1, key=registration_key('odds'))
+            prize = st.number_input('Prize (optional) (¥)', min_value=0.0, max_value=1000000000.0, value=0.0, step=1000.0, key=registration_key('prize'))
         with col2:
-            bracket_number = st.number_input(
-                "Bracket Number (optional) (枠番)",
-                min_value=0,
-                max_value=8,
-                value=0,
-               key=registration_key("bracket_number"),
-           )
-            horse_number = st.number_input(
-                "Horse Number (optional) (馬番)",
-                min_value=0,
-                max_value=18,
-                value=0,
-               key=registration_key("horse_number"),
-           )
-            horse_weight = st.number_input(
-                "Horse Weight (optional) (馬体重 kg)",
-                min_value=0.0,
-                max_value=999.9,
-                value=0.0,
-                step=0.1,
-               key=registration_key("horse_weight"),
-           )
-
-        st.write("Check the criteria that apply for this race (optional):")
-
+            bracket_number = st.number_input('Bracket Number (optional) (枠番)', min_value=0, max_value=8, value=0, key=registration_key('bracket_number'))
+            horse_number = st.number_input('Horse Number (optional) (馬番)', min_value=0, max_value=18, value=0, key=registration_key('horse_number'))
+            horse_weight = st.number_input('Horse Weight (optional) (馬体重 kg)', min_value=0.0, max_value=999.9, value=0.0, step=0.1, key=registration_key('horse_weight'))
+        st.write('Check the criteria that apply for this race (optional):')
         checklist_data = {}
         for criterion in criteria:
-            criterion_name = criterion["criteria_name"]
+            criterion_name = criterion['criteria_name']
             checklist_data[criterion_name] = st.checkbox(criterion_name, key=registration_key(f"criterion_{criterion['id']}"))
-
-        save_clicked = st.button("Save Checklist", key=registration_key("save_clicked"))
-
+        save_clicked = st.button('Save Checklist', key=registration_key('save_clicked'))
     if save_clicked:
         normalized_date_of_race = normalize_date(date_of_race)
         normalized_previous_race_date = normalize_date(previous_race_date)
-
-        if (
-            normalized_previous_race_date
-            and calculate_interval_days(
-                normalized_date_of_race,
-                normalized_previous_race_date,
-            )
-            is None
-        ):
-            st.error(
-                "Previous race date cannot be after the current race date."
-            )
+        if normalized_previous_race_date and calculate_interval_days(normalized_date_of_race, normalized_previous_race_date) is None:
+            st.error('Previous race date cannot be after the current race date.')
         else:
-            success, message = add_checklist(
-                owner_id=owner_id,
-                horse_id=get_selected_id(horse_ids, selected_horse_idx),
-                horse_owner_id=get_selected_id(
-                    horse_owner_ids,
-                    selected_horse_owner_idx,
-                ),
-                jockey_id=get_selected_id(jockey_ids, selected_jockey_idx),
-                previous_jockey_id=get_selected_id(
-                    jockey_ids,
-                    selected_previous_jockey_idx,
-                ),
-                trainer_id=get_selected_id(trainer_ids, selected_trainer_idx),
-                breeding_farm_id=get_selected_id(
-                    breeding_farm_ids,
-                    selected_breeding_farm_idx,
-                ),
-                stallion_id=get_selected_id(stallion_ids, selected_stallion_idx),
-                broodmare_sire_id=get_selected_id(
-                    stallion_ids,
-                    selected_broodmare_sire_idx,
-                ),
-                venue_id=get_selected_id(venue_ids, selected_venue_idx),
-                previous_venue_id=get_selected_id(
-                    venue_ids,
-                    selected_previous_venue_idx,
-                ),
-                race_name_id=get_selected_id(race_ids, selected_race_idx),
-                distance=to_optional_int(distance),
-                previous_distance=to_optional_int(previous_distance),
-                date_of_race=normalized_date_of_race,
-                previous_race_date=normalized_previous_race_date,
-                weight_change=to_optional_signed_float(weight_change),
-                memo=clean_text(memo),
-                finished_place=clean_text(finished_place),
-                checklist_data=(
-                    checklist_data
-                    if any(checklist_data.values())
-                    else None
-                ),
-                program_number=to_optional_int(program_number),
-                number_of_horses=to_optional_int(number_of_horses),
-                odds=to_optional_float(odds),
-                prize=to_optional_float(prize),
-                bracket_number=to_optional_int(bracket_number),
-                horse_number=to_optional_int(horse_number),
-                horse_weight=to_optional_float(horse_weight),
-            )
-
+            if not normalized_date_of_race:
+                st.error('Date of race is required.')
+                return
+            try:
+                success, message = add_checklist(owner_id=owner_id, horse_id=resolve_race_reference_input('horse', owner_id, selected_horse_idx), horse_owner_id=resolve_race_reference_input('horse_owner', owner_id, selected_horse_owner_idx), jockey_id=resolve_race_reference_input('jockey', owner_id, selected_jockey_idx), previous_jockey_id=resolve_race_reference_input('jockey', owner_id, selected_previous_jockey_idx), trainer_id=resolve_race_reference_input('trainer', owner_id, selected_trainer_idx), breeding_farm_id=resolve_race_reference_input('breeding_farm', owner_id, selected_breeding_farm_idx), stallion_id=resolve_race_reference_input('stallion', owner_id, selected_stallion_idx), broodmare_sire_id=resolve_race_reference_input('stallion', owner_id, selected_broodmare_sire_idx), venue_id=resolve_race_reference_input('venue', owner_id, selected_venue_idx), previous_venue_id=resolve_race_reference_input('venue', owner_id, selected_previous_venue_idx), race_name_id=resolve_race_reference_input('race_name', owner_id, selected_race_idx), distance=to_optional_int(distance), previous_distance=to_optional_int(previous_distance), date_of_race=normalized_date_of_race, previous_race_date=normalized_previous_race_date, weight_change=to_optional_signed_float(weight_change), memo=clean_text(memo), finished_place=clean_text(finished_place), checklist_data=checklist_data if any(checklist_data.values()) else None, program_number=to_optional_int(program_number), number_of_horses=to_optional_int(number_of_horses), odds=to_optional_float(odds), prize=to_optional_float(prize), bracket_number=to_optional_int(bracket_number), horse_number=to_optional_int(horse_number), horse_weight=to_optional_float(horse_weight))
+            except ValueError as reference_error:
+                st.error(str(reference_error))
+                return
             if success:
                 st.session_state[message_key] = message
                 st.session_state[revision_key] = revision + 1
                 st.rerun()
             else:
                 st.error(message)
-
     render_batch_import_section(owner_id, criteria)
+
 
 
 def render_batch_import_section(owner_id, criteria_items):
@@ -4945,6 +4802,239 @@ def render_review_stacked_count_charts(
     )
 
 
+
+# CHECKLIST_FILTER_HISTORY_V1
+FILTER_HISTORY_LIMIT = 100
+
+
+def _filter_history_session_key(owner_id):
+    return f"checklist_filter_history_{owner_id}"
+
+
+def _filter_history_fields():
+    # Pagination is display state, not a filter condition.
+    return [
+        name
+        for name in get_filter_defaults()
+        if name not in {"page_size", "page_number"}
+    ]
+
+
+def _capture_review_filter_configuration(owner_id):
+    from copy import deepcopy
+
+    defaults = get_filter_defaults()
+    fields = _filter_history_fields()
+
+    first = {
+        name: deepcopy(
+            st.session_state.get(
+                saved_filter_key(owner_id, name),
+                defaults[name],
+            )
+        )
+        for name in fields
+    }
+
+    second = {
+        name: deepcopy(
+            st.session_state.get(
+                second_filter_key(owner_id, name),
+                defaults[name],
+            )
+        )
+        for name in fields
+    }
+
+    return {
+        "first": first,
+        "second": second,
+        "second_enabled": bool(
+            st.session_state.get(
+                second_filter_key(owner_id, "enabled"),
+                False,
+            )
+        ),
+        "active_filter_title": st.session_state.get(
+            saved_filter_key(owner_id, "active_filter_title"),
+            "",
+        ),
+    }
+
+
+def _review_filter_configurations_equal(left, right):
+    # A saved-filter title is metadata, not a filtering condition.
+    return (
+        left["first"] == right["first"]
+        and left["second"] == right["second"]
+        and left["second_enabled"] == right["second_enabled"]
+    )
+
+
+def _record_review_filter_history(owner_id):
+    from copy import deepcopy
+
+    key = _filter_history_session_key(owner_id)
+    current = _capture_review_filter_configuration(owner_id)
+    history = st.session_state.get(key)
+
+    if not isinstance(history, dict) or not history.get("entries"):
+        st.session_state[key] = {
+            "entries": [deepcopy(current)],
+            "position": 0,
+        }
+        return
+
+    entries = history["entries"]
+    position = max(
+        0,
+        min(int(history.get("position", 0)), len(entries) - 1),
+    )
+
+    if _review_filter_configurations_equal(
+        entries[position],
+        current,
+    ):
+        # Update metadata without adding a duplicate configuration.
+        entries[position]["active_filter_title"] = current[
+            "active_filter_title"
+        ]
+        history["position"] = position
+        st.session_state[key] = history
+        return
+
+    # A changed configuration after backward navigation starts a new branch.
+    entries = entries[:position + 1]
+    entries.append(deepcopy(current))
+
+    if len(entries) > FILTER_HISTORY_LIMIT:
+        entries = entries[-FILTER_HISTORY_LIMIT:]
+
+    st.session_state[key] = {
+        "entries": entries,
+        "position": len(entries) - 1,
+    }
+
+
+def _restore_review_filter_configuration(owner_id, configuration):
+    from copy import deepcopy
+
+    defaults = get_filter_defaults()
+
+    # This function runs in a button callback, before the next script run
+    # instantiates filter widgets.
+    reset_filter_values(owner_id)
+    reset_second_filter_values(owner_id)
+
+    for name in _filter_history_fields():
+        st.session_state[saved_filter_key(owner_id, name)] = deepcopy(
+            configuration["first"].get(name, defaults[name])
+        )
+
+        st.session_state[second_filter_key(owner_id, name)] = deepcopy(
+            configuration["second"].get(name, defaults[name])
+        )
+
+    st.session_state[
+        saved_filter_key(owner_id, "active_filter_title")
+    ] = configuration.get("active_filter_title", "")
+
+    st.session_state[
+        second_filter_key(owner_id, "enabled")
+    ] = bool(configuration.get("second_enabled", False))
+
+    # Existing selectbox helpers use load versions to refresh their
+    # separate widget keys from the restored filter-state values.
+    first_version_key = filter_load_version_key(owner_id)
+    second_version_key = second_filter_load_version_key(owner_id)
+
+    st.session_state[first_version_key] = (
+        int(st.session_state.get(first_version_key, 0)) + 1
+    )
+
+    st.session_state[second_version_key] = (
+        int(st.session_state.get(second_version_key, 0)) + 1
+    )
+
+    # Restart pagination because the restored result set may be smaller.
+    for key_function in (saved_filter_key, second_filter_key):
+        st.session_state[key_function(owner_id, "page_number")] = 1
+
+    # This is the page-number widget key used by Checklist Review.
+    st.session_state[
+        saved_filter_key(owner_id, "page_number_input")
+    ] = 1
+
+    # Avoid carrying an editor selection into a different result set.
+    st.session_state.pop("selected_review_checklist_id", None)
+
+
+def _navigate_review_filter_history(owner_id, direction):
+    key = _filter_history_session_key(owner_id)
+    history = st.session_state.get(key)
+
+    if not isinstance(history, dict):
+        return
+
+    entries = history.get("entries") or []
+
+    if not entries:
+        return
+
+    position = int(history.get("position", 0))
+    target = position + direction
+
+    if target < 0 or target >= len(entries):
+        return
+
+    _restore_review_filter_configuration(
+        owner_id,
+        entries[target],
+    )
+
+    history["position"] = target
+    st.session_state[key] = history
+
+
+def render_review_filter_history(owner_id):
+    # Called after both sets of filter widgets have updated their state.
+    _record_review_filter_history(owner_id)
+
+    history = st.session_state[_filter_history_session_key(owner_id)]
+    entries = history["entries"]
+    position = history["position"]
+
+    st.markdown("### Filter History")
+
+    previous_column, next_column, status_column = st.columns([1, 1, 2])
+
+    with previous_column:
+        st.button(
+            "Last Filter",
+            key=f"review_filter_history_previous_{owner_id}",
+            disabled=position <= 0,
+            on_click=_navigate_review_filter_history,
+            args=(owner_id, -1),
+            use_container_width=True,
+        )
+
+    with next_column:
+        st.button(
+            "Next Filter",
+            key=f"review_filter_history_next_{owner_id}",
+            disabled=position >= len(entries) - 1,
+            on_click=_navigate_review_filter_history,
+            args=(owner_id, 1),
+            use_container_width=True,
+        )
+
+    with status_column:
+        st.caption(
+            f"Configuration {position + 1} of {len(entries)}"
+        )
+
+
+
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
 
@@ -5679,9 +5769,97 @@ def render_checklist_review_page():
         second_filter_enabled=second_filter_enabled,
     )
 
+
+    render_review_filter_history(owner_id)
+
     review_metrics = calculate_review_metrics(first_filtered_checklists)
 
     st.subheader("Review Summary")
+
+    # REVIEW_SUMMARY_TOP_THREE_RECENCY_V3
+    def _summary_latest_top_three_date(entries):
+        latest_date = None
+
+        for entry in entries:
+            finished_place = clean_text(entry.get("finished_place"))
+
+            if not finished_place.isdecimal():
+                continue
+
+            if int(finished_place) not in (1, 2, 3):
+                continue
+
+            race_date = parse_race_date(entry.get("date_of_race"))
+
+            if race_date is None:
+                continue
+
+            if latest_date is None or race_date > latest_date:
+                latest_date = race_date
+
+        return latest_date
+
+    def _summary_render_top_three_recency(entries, scope):
+        from datetime import date as _recency_date
+
+        today = _recency_date.today()
+        latest_date = _summary_latest_top_three_date(entries)
+
+        latest_date_column, latest_age_column = st.columns(2)
+
+        with latest_date_column:
+            st.metric(
+                label=f"{scope}: Latest Top-3 Matched Date",
+                value=(
+                    latest_date.isoformat()
+                    if latest_date is not None
+                    else "N/A"
+                ),
+            )
+
+        with latest_age_column:
+            if latest_date is None:
+                age_text = "N/A"
+            else:
+                days_since = (today - latest_date).days
+                age_text = (
+                    f"{days_since:,} day(s)"
+                    if days_since >= 0
+                    else "Future date"
+                )
+
+            st.metric(
+                label=f"{scope}: Days Since Latest Top-3 Match",
+                value=age_text,
+            )
+
+        if latest_date is None:
+            st.caption(
+                f"{scope}: No matching first-, second-, or third-place "
+                "finish has a valid race date."
+            )
+        elif latest_date > today:
+            st.warning(
+                f"{scope}: The latest top-three result is dated in "
+                "the future. Check its race date or finishing position."
+            )
+
+    _summary_render_top_three_recency(
+        first_filtered_checklists,
+        "First Filter",
+    )
+
+    if second_filter_enabled:
+        _summary_render_top_three_recency(
+            (
+                second_filtered_checklists
+                if second_filtered_checklists is not None
+                else []
+            ),
+            "Second Filter",
+        )
+
+
 
     summary_col1, summary_col2, summary_col3, summary_col4 = (
         st.columns(4)
