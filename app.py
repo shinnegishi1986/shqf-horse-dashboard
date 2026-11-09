@@ -12,7 +12,9 @@ import io
 # after redeploy/restart. Use persistent storage for production data if needed.
 DB_PATH = "data/horse_checklist_app.db"
 
-st.set_page_config(page_title="Horse Checklist App", layout="centered")
+# CHECKLIST_REVIEW_ONLY_WIDE_LAYOUT_V1
+# RACE_CHECKLIST_AND_REVIEW_WIDE_LAYOUT_V1
+st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session_state.get('logged_in', False) and st.session_state.get('app_navigation_page', 'Race Checklist') in ('Race Checklist', 'Checklist Review') else 'centered')
 
 
 # -------------------------------------------------
@@ -4996,8 +4998,19 @@ def _navigate_review_filter_history(owner_id, direction):
     st.session_state[key] = history
 
 
+# CLEAR_FILTER_HISTORY_BUTTON_V1
+def _clear_review_filter_history(owner_id):
+    from copy import deepcopy
+
+    current = _capture_review_filter_configuration(owner_id)
+
+    st.session_state[_filter_history_session_key(owner_id)] = {
+        "entries": [deepcopy(current)],
+        "position": 0,
+    }
+
+
 def render_review_filter_history(owner_id):
-    # Called after both sets of filter widgets have updated their state.
     _record_review_filter_history(owner_id)
 
     history = st.session_state[_filter_history_session_key(owner_id)]
@@ -5006,12 +5019,13 @@ def render_review_filter_history(owner_id):
 
     st.markdown("### Filter History")
 
-    previous_column, next_column, status_column = st.columns([1, 1, 2])
+    previous_column, next_column, clear_column = st.columns(3)
 
     with previous_column:
         st.button(
             "Last Filter",
             key=f"review_filter_history_previous_{owner_id}",
+            type="secondary",
             disabled=position <= 0,
             on_click=_navigate_review_filter_history,
             args=(owner_id, -1),
@@ -5022,16 +5036,32 @@ def render_review_filter_history(owner_id):
         st.button(
             "Next Filter",
             key=f"review_filter_history_next_{owner_id}",
+            type="secondary",
             disabled=position >= len(entries) - 1,
             on_click=_navigate_review_filter_history,
             args=(owner_id, 1),
             use_container_width=True,
         )
 
-    with status_column:
-        st.caption(
-            f"Configuration {position + 1} of {len(entries)}"
+    with clear_column:
+        st.button(
+            "Clear History",
+            key=f"review_filter_history_clear_{owner_id}",
+            type="primary",
+            disabled=len(entries) <= 1,
+            on_click=_clear_review_filter_history,
+            args=(owner_id,),
+            help=(
+                "Remove previous and forward history while keeping "
+                "the currently applied filters."
+            ),
+            use_container_width=True,
         )
+
+    st.caption(
+        f"Configuration {position + 1} of {len(entries)}"
+    )
+
 
 
 
@@ -6188,23 +6218,7 @@ def main():
     st.sidebar.title("Horse Checklist App")
     st.sidebar.write(f"Logged in as: {st.session_state.display_name}")
 
-    page = st.sidebar.radio(
-        "Menu",
-        [
-            "Race Checklist",
-            "Checklist Review",
-            "Account Settings",
-            "Horses",
-            "Horse Owners",
-            "Jockeys",
-            "Trainers",
-            "Breeding Farms",
-            "Stallions",
-            "Venues",
-            "Race Names",
-            "Criteria",
-        ],
-    )
+    page = st.sidebar.radio('Menu', ['Race Checklist', 'Checklist Review', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria'], key='app_navigation_page')
 
     if st.sidebar.button("Logout"):
         st.session_state.clear()
