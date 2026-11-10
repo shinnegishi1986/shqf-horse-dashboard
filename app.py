@@ -2968,52 +2968,14 @@ def _review_arrow_safe_summary(dataframe):
 
     return dataframe
 
+# REVIEW_TABLE_TALLER_AND_REFERENCE_COLUMNS_V1
 def build_summary_dataframe(checklists):
     summary_rows = []
-
     for entry in checklists:
-        checked_criteria = [
-            key
-            for key, value in (entry.get("checklist") or {}).items()
-            if value
-        ]
-
-        summary_rows.append(
-            {
-                "ID": entry["id"],
-                "Date": entry.get("date_of_race") or "",
-                "Previous Race Date": entry.get("previous_race_date") or "",
-                "Days Since Last Race": (
-                    entry.get("interval_days")
-                    if entry.get("interval_days") is not None
-                    else ""
-                ),
-                "Horse": entry.get("horse_name") or "",
-                "Horse Owner": entry.get("horse_owner_name") or "",
-                "Jockey": entry.get("jockey_name") or "",
-                "Race": entry.get("race_name") or "",
-                "Venue": entry.get("venue_name") or "",
-                "Previous Venue": entry.get("previous_venue_name") or "",
-                "Distance": entry.get("distance") or "",
-                "Previous Distance": entry.get("previous_distance") or "",
-                "Weight Change (kg)": format_signed_number(
-                    entry.get("weight_change")
-                ),
-                "Horse Weight (kg)": entry.get("horse_weight") or "",
-                "Place": entry.get("finished_place") or "",
-                "Odds": entry.get("odds")
-                if entry.get("odds") is not None
-                else "",
-                "Prize (¥)": (
-                    f"¥{entry.get('prize'):,.0f}"
-                    if entry.get("prize") is not None
-                    else ""
-                ),
-                "Criteria": " | ".join(checked_criteria),
-            }
-        )
-
+        checked_criteria = [key for key, value in (entry.get('checklist') or {}).items() if value]
+        summary_rows.append({'ID': entry['id'], 'Date': entry.get('date_of_race') or '', 'Previous Race Date': entry.get('previous_race_date') or '', 'Days Since Last Race': entry.get('interval_days') if entry.get('interval_days') is not None else '', 'Horse': entry.get('horse_name') or '', 'Horse Owner': entry.get('horse_owner_name') or '', 'Jockey': entry.get('jockey_name') or '', 'Trainer': entry.get('trainer_name') or '', 'Breeding Farm': entry.get('breeding_farm_name') or '', 'Stallion': entry.get('stallion_name') or '', 'Race': entry.get('race_name') or '', 'Venue': entry.get('venue_name') or '', 'Previous Venue': entry.get('previous_venue_name') or '', 'Distance': entry.get('distance') or '', 'Previous Distance': entry.get('previous_distance') or '', 'Weight Change (kg)': format_signed_number(entry.get('weight_change')), 'Horse Weight (kg)': entry.get('horse_weight') or '', 'Place': entry.get('finished_place') or '', 'Odds': entry.get('odds') if entry.get('odds') is not None else '', 'Prize (¥)': f"¥{entry.get('prize'):,.0f}" if entry.get('prize') is not None else '', 'Criteria': ' | '.join(checked_criteria)})
     return _review_arrow_safe_summary(pd.DataFrame(summary_rows))
+
 
 
 def calculate_review_metrics(filtered_checklists):
@@ -4221,7 +4183,7 @@ def render_checklist_review_page():
         last_item_number = min(current_page * page_size, total_results)
         st.caption(f'Showing {first_item_number}-{last_item_number} of {total_results} filtered checklist(s). Summary metrics above are calculated from all filtered results.')
         summary_df = build_summary_dataframe(paginated_checklists)
-        st.dataframe(summary_df, width='stretch', hide_index=True)
+        st.dataframe(summary_df, width='stretch', hide_index=True, height=480)
         checklist_lookup = {entry['id']: entry for entry in paginated_checklists}
         if checklist_lookup:
             selected_review_checklist_id = st.selectbox('Select checklist on this page to edit', list(checklist_lookup.keys()), format_func=lambda checklist_id: f"#{checklist_id} | {checklist_lookup[checklist_id].get('date_of_race') or ''} | {checklist_lookup[checklist_id].get('horse_name') or ''} | {checklist_lookup[checklist_id].get('horse_owner_name') or ''} | {checklist_lookup[checklist_id].get('venue_name') or ''}", key='selected_review_checklist_id')
@@ -4231,6 +4193,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
