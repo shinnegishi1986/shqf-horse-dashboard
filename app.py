@@ -5151,6 +5151,411 @@ def render_review_filter_history(owner_id):
 # WEIGHT_CHART_RANGE_350_TO_650_V1
 # WEIGHT_CHART_TOP_THREE_CONDITION_V1
 # WEIGHT_CHART_FIXED_FIVE_KG_BINS_V1
+# TOUCH_WEIGHT_HISTOGRAM_TOOLTIPS_V1
+def _render_touch_weight_histogram(data, spec=None, **kwargs):
+    import json
+    import streamlit.components.v1 as components
+
+    # Keep the existing older-device text fallback.
+    lightweight_check = globals().get("_older_device_lightweight_enabled")
+    lightweight_renderer = globals().get("_older_device_vega_lite_chart")
+
+    if (
+        callable(lightweight_check)
+        and lightweight_check()
+        and callable(lightweight_renderer)
+    ):
+        return lightweight_renderer(data, spec=spec, **kwargs)
+
+    bins = [
+        {
+            "lower": float(lower),
+            "upper": float(upper),
+            "count": int(count),
+        }
+        for lower, upper, count in data[
+            ["from_weight", "to_weight", "count"]
+        ].itertuples(index=False, name=None)
+    ]
+
+    references = []
+
+    for layer in (spec or {}).get("layer", []):
+        values = layer.get("data", {}).get("values", [])
+
+        for value in values:
+            if "weight" in value and "reference" in value:
+                references.append(
+                    {
+                        "weight": float(value["weight"]),
+                        "label": str(value["reference"]),
+                    }
+                )
+
+    payload = json.dumps(
+        {
+            "bins": bins,
+            "references": references,
+        },
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+    payload = (
+        payload.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+    template = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { box-sizing: border-box; }
+html, body {
+    margin: 0;
+    background: #111827;
+    color: #f8fafc;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color-scheme: dark;
+}
+body { padding: 10px; }
+.hint {
+    font-size: 12px;
+    color: #cbd5e1;
+    margin: 0 0 8px;
+}
+svg {
+    display: block;
+    width: 100%;
+    height: 235px;
+    overflow: visible;
+}
+.hit {
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.hit:focus { outline: none; }
+.highlight { stroke: #ffffff; stroke-width: 2; }
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    font-size: 12px;
+    margin: 4px 0 10px;
+}
+label { display: block; font-size: 12px; margin-bottom: 5px; }
+select {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px;
+    border: 1px solid #94a3b8;
+    border-radius: 6px;
+    background: #1e293b;
+    color: #f8fafc;
+    font-size: 16px;
+}
+#tip {
+    position: fixed;
+    z-index: 10;
+    max-width: calc(100vw - 20px);
+    padding: 10px 13px;
+    border: 1px solid #94a3b8;
+    border-radius: 10px;
+    background: #1e293b;
+    color: #ffffff;
+    box-shadow: 0 5px 18px rgba(0,0,0,.4);
+    font-size: 13px;
+    line-height: 1.5;
+    pointer-events: none;
+}
+#tip[hidden] { display: none; }
+#tip-title { font-weight: 700; }
+</style>
+</head>
+<body>
+<p class="hint">Tap a bar for its 5 kg range and record count.</p>
+<svg id="chart" role="group" aria-label="Horse-weight histogram"></svg>
+<div id="legend" class="legend"></div>
+<label for="range">Select a range, including empty bins</label>
+<select id="range">
+    <option value="">Select a 5 kg range</option>
+</select>
+<div id="tip" role="tooltip" hidden>
+    <div id="tip-title"></div>
+    <div id="tip-count"></div>
+    <div id="tip-boundary"></div>
+</div>
+<script>
+"use strict";
+const data = __DATA__;
+const svg = document.getElementById("chart");
+const tip = document.getElementById("tip");
+const selector = document.getElementById("range");
+const ns = "http://www.w3.org/2000/svg";
+const colors = {
+    "Mean": "#fbbf24",
+    "Mean - 1 SD": "#f472b6",
+    "Mean + 1 SD": "#34d399"
+};
+let pinned = false;
+let active = null;
+let activeAnchor = null;
+let bars = [];
+
+function element(tag, attributes, text) {
+    const item = document.createElementNS(ns, tag);
+    Object.keys(attributes).forEach(function(key) {
+        item.setAttribute(key, attributes[key]);
+    });
+    if (text !== undefined) item.textContent = text;
+    svg.appendChild(item);
+    return item;
+}
+
+function positionTip(anchor) {
+    const rect = anchor.getBoundingClientRect();
+    tip.style.left = "10px";
+    tip.style.top = "10px";
+    const width = tip.offsetWidth;
+    const height = tip.offsetHeight;
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const left = Math.max(
+        10,
+        Math.min(rect.left + rect.width / 2 - width / 2, vw - width - 10)
+    );
+    let top = rect.top - height - 8;
+    if (top < 8) top = rect.bottom + 8;
+    top = Math.max(8, Math.min(top, vh - height - 8));
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+}
+
+function show(index, anchor) {
+    const bin = data.bins[index];
+    if (active !== null) bars[active].classList.remove("highlight");
+    active = index;
+    activeAnchor = anchor;
+    bars[index].classList.add("highlight");
+
+    document.getElementById("tip-title").textContent =
+        bin.lower + "–" + bin.upper + " kg";
+    document.getElementById("tip-count").textContent =
+        "Records: " + bin.count.toLocaleString();
+    document.getElementById("tip-boundary").textContent =
+        index === data.bins.length - 1
+        ? "Both endpoints included"
+        : "Lower bound included; upper bound excluded";
+
+    tip.hidden = false;
+    positionTip(anchor);
+}
+
+function hide() {
+    if (active !== null) bars[active].classList.remove("highlight");
+    active = null;
+    activeAnchor = null;
+    pinned = false;
+    tip.hidden = true;
+}
+
+data.bins.forEach(function(bin, index) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent =
+        bin.lower + "–" + bin.upper + " kg — " + bin.count + " records";
+    selector.appendChild(option);
+});
+
+selector.addEventListener("change", function() {
+    if (selector.value === "") {
+        hide();
+        return;
+    }
+    pinned = true;
+    show(Number(selector.value), selector);
+});
+
+function draw() {
+    hide();
+    svg.replaceChildren();
+    bars = [];
+
+    const width = Math.max(280, svg.clientWidth);
+    const height = 235;
+    const left = 38;
+    const right = 10;
+    const top = 14;
+    const bottom = 42;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    const maximum = Math.max(1, ...data.bins.map(function(b) {
+        return b.count;
+    }));
+    const upperCount = Math.max(1, Math.ceil(maximum * 1.12));
+    const x = function(weight) {
+        return left + (weight - 350) / 300 * plotWidth;
+    };
+    const y = function(count) {
+        return top + plotHeight - count / upperCount * plotHeight;
+    };
+
+    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+    const ticks = [...new Set([
+        0,
+        Math.round(upperCount / 2),
+        upperCount
+    ])];
+
+    ticks.forEach(function(tick) {
+        element("line", {
+            x1: left, x2: width - right,
+            y1: y(tick), y2: y(tick),
+            stroke: "#334155"
+        });
+        element("text", {
+            x: left - 6, y: y(tick) + 4,
+            "text-anchor": "end",
+            fill: "#cbd5e1", "font-size": 11
+        }, tick);
+    });
+
+    [350, 400, 450, 500, 550, 600, 650].forEach(function(tick) {
+        element("text", {
+            x: x(tick), y: height - 24,
+            "text-anchor": "middle",
+            fill: "#f8fafc", "font-size": 10
+        }, tick);
+    });
+
+    element("text", {
+        x: left + plotWidth / 2, y: height - 5,
+        "text-anchor": "middle",
+        fill: "#cbd5e1", "font-size": 11
+    }, "Horse weight (kg)");
+
+    element("text", {
+        x: left, y: 10,
+        fill: "#cbd5e1", "font-size": 10
+    }, "Records");
+
+    data.bins.forEach(function(bin) {
+        const bar = element("rect", {
+            x: x(bin.lower) + 0.5,
+            y: y(bin.count),
+            width: Math.max(0.5, x(bin.upper) - x(bin.lower) - 1),
+            height: top + plotHeight - y(bin.count),
+            fill: "#60a5fa"
+        });
+        bars.push(bar);
+    });
+
+    data.references.forEach(function(reference) {
+        if (reference.weight < 350 || reference.weight > 650) return;
+        element("line", {
+            x1: x(reference.weight), x2: x(reference.weight),
+            y1: top, y2: top + plotHeight,
+            stroke: colors[reference.label] || "#ffffff",
+            "stroke-width": 2,
+            "pointer-events": "none"
+        });
+    });
+
+    // Full-height transparent targets also allow empty bins to be tapped.
+    data.bins.forEach(function(bin, index) {
+        const hit = element("rect", {
+            x: x(bin.lower),
+            y: top,
+            width: x(bin.upper) - x(bin.lower),
+            height: plotHeight,
+            fill: "transparent",
+            class: "hit",
+            tabindex: 0,
+            role: "button",
+            "aria-label":
+                bin.lower + " to " + bin.upper + " kg, " +
+                bin.count + " records",
+            "aria-describedby": "tip"
+        });
+
+        hit.addEventListener("click", function(event) {
+            event.stopPropagation();
+            pinned = true;
+            selector.value = String(index);
+            show(index, hit);
+        });
+
+        hit.addEventListener("pointerenter", function(event) {
+            if (event.pointerType === "mouse" && !pinned) show(index, hit);
+        });
+
+        hit.addEventListener("pointerleave", function(event) {
+            if (event.pointerType === "mouse" && !pinned) hide();
+        });
+
+        hit.addEventListener("focus", function() {
+            if (!pinned) show(index, hit);
+        });
+
+        hit.addEventListener("blur", function() {
+            if (!pinned) hide();
+        });
+
+        hit.addEventListener("keydown", function(event) {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                pinned = true;
+                selector.value = String(index);
+                show(index, hit);
+            }
+        });
+    });
+}
+
+const legend = document.getElementById("legend");
+data.references.forEach(function(reference) {
+    const item = document.createElement("span");
+    item.style.color = colors[reference.label] || "#ffffff";
+    item.textContent =
+        reference.label + ": " + reference.weight.toFixed(1) + " kg";
+    legend.appendChild(item);
+});
+
+document.addEventListener("click", function(event) {
+    if (
+        !event.target.closest(".hit") &&
+        !event.target.closest("#range")
+    ) hide();
+});
+
+document.addEventListener("keydown", function(event) {
+    if (event.key === "Escape") hide();
+});
+
+let resizeTimer;
+window.addEventListener("resize", function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(draw, 100);
+});
+
+draw();
+</script>
+</body>
+</html>
+"""
+
+    components.html(
+        template.replace("__DATA__", payload),
+        height=440,
+        scrolling=False,
+    )
+
 def render_review_weight_standard_distribution(owner_id, first_filtered_checklists, second_filtered_checklists=None, second_filter_enabled=False):
     show_chart = st.checkbox('Show top-three horse-weight distribution and standard deviation', value=False, key=f'review_weight_standard_distribution_visible_{owner_id}')
     if not show_chart:
@@ -5223,9 +5628,10 @@ def render_review_weight_standard_distribution(owner_id, first_filtered_checklis
     padding = 0.0
     x_scale = {'domain': [domain_minimum - padding, domain_maximum + padding], 'nice': False}
     spec = {'height': 240, 'background': '#111827', 'padding': {'left': 10, 'top': 10, 'right': 10, 'bottom': 10}, 'layer': [{'mark': {'type': 'bar', 'color': '#60A5FA', 'opacity': 0.85}, 'encoding': {'x': {'field': 'from_weight', 'type': 'quantitative', 'bin': 'binned', 'scale': x_scale, 'axis': {'title': 'Horse weight (kg)', 'tickCount': 4, 'format': '.0f'}}, 'x2': {'field': 'to_weight'}, 'y': {'field': 'count', 'type': 'quantitative', 'axis': {'title': 'Record count', 'tickCount': 4, 'tickMinStep': 1, 'format': ',.0f'}}, 'tooltip': [{'field': 'from_weight', 'type': 'quantitative', 'title': 'From (kg)', 'format': '.1f'}, {'field': 'to_weight', 'type': 'quantitative', 'title': 'To (kg)', 'format': '.1f'}, {'field': 'count', 'type': 'quantitative', 'title': 'Records', 'format': ',.0f'}]}}, {'data': {'values': reference_lines}, 'mark': {'type': 'rule', 'strokeWidth': 2}, 'encoding': {'x': {'field': 'weight', 'type': 'quantitative', 'scale': x_scale}, 'color': {'field': 'reference', 'type': 'nominal', 'scale': {'domain': ['Mean', 'Mean - 1 SD', 'Mean + 1 SD'], 'range': ['#FBBF24', '#F472B6', '#34D399']}, 'legend': {'title': None, 'orient': 'bottom', 'direction': 'horizontal', 'columns': 1, 'labelColor': '#F8FAFC'}}, 'tooltip': [{'field': 'reference', 'type': 'nominal', 'title': 'Reference'}, {'field': 'weight', 'type': 'quantitative', 'title': 'Weight (kg)', 'format': '.1f'}]}}], 'config': {'view': {'stroke': None}, 'axis': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'domainColor': '#64748B', 'tickColor': '#64748B', 'gridColor': '#334155', 'labelFontSize': 11, 'titleFontSize': 12}, 'legend': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'labelFontSize': 11}}}
-    _older_device_vega_lite_chart(pd.DataFrame(bins), spec=spec, use_container_width=True)
+    _render_touch_weight_histogram(pd.DataFrame(bins), spec=spec, use_container_width=True)
     if standard_deviation is not None:
         st.caption(f'Mean ± 1 sample SD: {mean_weight - standard_deviation:,.1f} to {mean_weight + standard_deviation:,.1f} kg. Each checklist is one observation, so a horse can appear more than once. The chart does not assume a normal distribution.')
+
 
 
 
