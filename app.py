@@ -6725,120 +6725,347 @@ def render_account_settings_page():
 # -------------------------------------------------
 # App routing
 # -------------------------------------------------
+# PERSISTENT_LOGIN_DATABASE_TOKEN_V1
+def _persistent_login_initialize():
+    conn = get_db_connection()
+
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS persistent_login_tokens (
+                token_hash TEXT PRIMARY KEY,
+                owner_id INTEGER NOT NULL,
+                password_version TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(owner_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _persistent_login_digest(value):
+    import hashlib
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _persistent_login_component():
+    from pathlib import Path
+    import streamlit.components.v1 as components
+
+    return components.declare_component(
+        "horse_checklist_persistent_login_v1",
+        path=str(
+            Path(__file__).resolve().parent
+            / "_persistent_login_component"
+        ),
+    )
+
+
+def _persistent_login_cookie_name():
+    # Different local application directories get different cookie names.
+    from pathlib import Path
+
+    application_id = _persistent_login_digest(
+        str(Path(__file__).resolve())
+    )[:12]
+
+    return f"horse_checklist_login_{application_id}"
+
+
+def _persistent_login_revoke(token):
+    if not token:
+        return
+
+    conn = get_db_connection()
+
+    try:
+        conn.execute(
+            """
+            DELETE FROM persistent_login_tokens
+            WHERE token_hash = ?
+            """,
+            (_persistent_login_digest(token),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _persistent_login_lookup(token):
+    if not isinstance(token, str) or not 40 <= len(token) <= 128:
+        return None
+
+    conn = get_db_connection()
+
+    try:
+        row = conn.execute(
+            """
+            SELECT
+                users.id,
+                users.display_name,
+                users.password,
+                persistent_login_tokens.password_version
+            FROM persistent_login_tokens
+            JOIN users
+                ON users.id = persistent_login_tokens.owner_id
+            WHERE persistent_login_tokens.token_hash = ?
+            """,
+            (_persistent_login_digest(token),),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        if (
+            _persistent_login_digest(row["password"])
+            != row["password_version"]
+        ):
+            conn.execute(
+                """
+                DELETE FROM persistent_login_tokens
+                WHERE token_hash = ?
+                """,
+                (_persistent_login_digest(token),),
+            )
+            conn.commit()
+            return None
+
+        return {
+            "id": row["id"],
+            "display_name": row["display_name"],
+        }
+    finally:
+        conn.close()
+
+
+def _persistent_login_issue(owner_id):
+    import secrets
+
+    _persistent_login_initialize()
+
+    old_token = st.session_state.get("_persistent_login_token")
+    _persistent_login_revoke(old_token)
+
+    token = secrets.token_urlsafe(48)
+    conn = get_db_connection()
+
+    try:
+        user = conn.execute(
+            "SELECT password FROM users WHERE id = ?",
+            (owner_id,),
+        ).fetchone()
+
+        if user is None:
+            raise ValueError("The user account no longer exists.")
+
+        conn.execute(
+            """
+            INSERT INTO persistent_login_tokens (
+                token_hash,
+                owner_id,
+                password_version
+            )
+            VALUES (?, ?, ?)
+            """,
+            (
+                _persistent_login_digest(token),
+                owner_id,
+                _persistent_login_digest(user["password"]),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    st.session_state["_persistent_login_token"] = token
+    st.session_state["_persistent_login_pending"] = {
+        "operation": "set",
+        "token": token,
+        "request_id": secrets.token_hex(16),
+    }
+
+
+def _persistent_login_logout():
+    import secrets
+
+    _persistent_login_revoke(
+        st.session_state.get("_persistent_login_token")
+    )
+
+    st.session_state.clear()
+
+    st.session_state["_persistent_login_pending"] = {
+        "operation": "delete",
+        "token": "",
+        "request_id": secrets.token_hex(16),
+    }
+
+
+def _persistent_login_bootstrap():
+    import secrets
+
+    _persistent_login_initialize()
+
+    if "_persistent_login_read_request" not in st.session_state:
+        st.session_state["_persistent_login_read_request"] = (
+            secrets.token_hex(16)
+        )
+
+    pending = st.session_state.get("_persistent_login_pending")
+
+    request = pending or {
+        "operation": "read",
+        "token": "",
+        "request_id": st.session_state[
+            "_persistent_login_read_request"
+        ],
+    }
+
+    component = _persistent_login_component()
+
+    result = component(
+        cookie_name=_persistent_login_cookie_name(),
+        operation=request["operation"],
+        token=request["token"],
+        request_id=request["request_id"],
+        key="_persistent_login_cookie_bridge",
+        default=None,
+    )
+
+    # Wait for the browser's acknowledgement rather than restoring login
+    # from a stale component return value.
+    if (
+        not isinstance(result, dict)
+        or result.get("request_id") != request["request_id"]
+    ):
+        st.info("Restoring login session…")
+        st.stop()
+
+    if result.get("error"):
+        st.warning(
+            "Persistent login storage is unavailable in this browser. "
+            "Your current login can still be used, but another login "
+            "may be required after a reload."
+        )
+
+    if pending:
+        st.session_state.pop("_persistent_login_pending", None)
+
+        if pending["operation"] == "delete":
+            st.session_state["logged_in"] = False
+            st.session_state.pop("_persistent_login_token", None)
+            return
+
+        # A successfully authenticated user can keep using the current
+        # session even if the browser refuses persistent cookie storage.
+        token = pending["token"]
+    else:
+        token = (
+            st.session_state.get("_persistent_login_token")
+            or result.get("token", "")
+        )
+
+    user = _persistent_login_lookup(token)
+
+    if user is None:
+        st.session_state["logged_in"] = False
+        st.session_state.pop("user_id", None)
+        st.session_state.pop("display_name", None)
+        st.session_state.pop("_persistent_login_token", None)
+        return
+
+    st.session_state["logged_in"] = True
+    st.session_state["user_id"] = user["id"]
+    st.session_state["display_name"] = user["display_name"]
+    st.session_state["_persistent_login_token"] = token
+
 def render_login_page():
-    st.title("Horse Checklist App")
-
-    login_tab, register_tab = st.tabs(["Login", "Register"])
-
+    st.title('Horse Checklist App')
+    login_tab, register_tab = st.tabs(['Login', 'Register'])
     with login_tab:
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            login_clicked = st.form_submit_button("Login")
-
+        with st.form('login_form'):
+            username = st.text_input('Username')
+            password = st.text_input('Password', type='password')
+            login_clicked = st.form_submit_button('Login')
         if login_clicked:
             success, display_name, user_id = login_user(username, password)
-
             if success:
                 st.session_state.logged_in = True
                 st.session_state.display_name = display_name
                 st.session_state.user_id = user_id
+                _persistent_login_issue(user_id)
                 st.rerun()
             else:
-                st.error("Invalid username or password.")
-
+                st.error('Invalid username or password.')
     with register_tab:
-        with st.form("register_form", clear_on_submit=True):
-            username = st.text_input("Username", key="register_username")
-            display_name = st.text_input("Display Name")
-            password = st.text_input(
-                "Password",
-                type="password",
-                key="register_password",
-            )
-            password_confirm = st.text_input(
-                "Confirm Password",
-                type="password",
-            )
-            invitation_code = st.text_input("Invitation Code")
-            register_clicked = st.form_submit_button("Register")
-
+        with st.form('register_form', clear_on_submit=True):
+            username = st.text_input('Username', key='register_username')
+            display_name = st.text_input('Display Name')
+            password = st.text_input('Password', type='password', key='register_password')
+            password_confirm = st.text_input('Confirm Password', type='password')
+            invitation_code = st.text_input('Invitation Code')
+            register_clicked = st.form_submit_button('Register')
         if register_clicked:
             username = clean_text(username)
             display_name = clean_text(display_name)
             invitation_code = clean_text(invitation_code)
-
-            if not username or not display_name or not password or not invitation_code:
-                st.error("Please complete all fields.")
+            if not username or not display_name or (not password) or (not invitation_code):
+                st.error('Please complete all fields.')
             elif password != password_confirm:
-                st.error("Passwords do not match.")
+                st.error('Passwords do not match.')
             else:
-                success, message = register_user(
-                    username,
-                    display_name,
-                    password,
-                    invitation_code,
-                )
-
+                success, message = register_user(username, display_name, password, invitation_code)
                 if success:
                     st.success(message)
                 else:
                     st.error(message)
 
 
+
 def main():
     render_older_device_settings()
-
     init_db()
-
-    if "logged_in" not in st.session_state:
+    _persistent_login_bootstrap()
+    if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
-
     if not st.session_state.logged_in:
         render_login_page()
         return
-
-    st.sidebar.title("Horse Checklist App")
-    st.sidebar.write(f"Logged in as: {st.session_state.display_name}")
-
+    st.sidebar.title('Horse Checklist App')
+    st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
     page = st.sidebar.radio('Menu', ['Race Checklist', 'Checklist Review', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria'], key='app_navigation_page')
-
-    if st.sidebar.button("Logout"):
-        st.session_state.clear()
+    if st.sidebar.button('Logout'):
+        _persistent_login_logout()
         st.rerun()
-
-    if page == "Race Checklist":
+    if page == 'Race Checklist':
         render_race_checklist_page()
-    elif page == "Checklist Review":
+    elif page == 'Checklist Review':
         render_checklist_review_page()
-    elif page == "Account Settings":
+    elif page == 'Account Settings':
         render_account_settings_page()
-    elif page == "Horses":
-        render_template_page("horse", "Horses", "Horse Name")
-    elif page == "Horse Owners":
-        render_template_page(
-            "horse_owner",
-            "Horse Owners",
-            "Horse Owner Name",
-        )
-    elif page == "Jockeys":
-        render_template_page("jockey", "Jockeys", "Jockey Name")
-    elif page == "Trainers":
-        render_template_page("trainer", "Trainers", "Trainer Name")
-    elif page == "Breeding Farms":
-        render_template_page(
-            "breeding_farm",
-            "Breeding Farms",
-            "Breeding Farm Name",
-        )
-    elif page == "Stallions":
-        render_template_page("stallion", "Stallions", "Stallion Name")
-    elif page == "Venues":
-        render_template_page("venue", "Venues", "Venue Name")
-    elif page == "Race Names":
-        render_template_page("race_name", "Race Names", "Race Name")
-    elif page == "Criteria":
-        render_template_page("criteria", "Criteria", "Criteria Name")
+    elif page == 'Horses':
+        render_template_page('horse', 'Horses', 'Horse Name')
+    elif page == 'Horse Owners':
+        render_template_page('horse_owner', 'Horse Owners', 'Horse Owner Name')
+    elif page == 'Jockeys':
+        render_template_page('jockey', 'Jockeys', 'Jockey Name')
+    elif page == 'Trainers':
+        render_template_page('trainer', 'Trainers', 'Trainer Name')
+    elif page == 'Breeding Farms':
+        render_template_page('breeding_farm', 'Breeding Farms', 'Breeding Farm Name')
+    elif page == 'Stallions':
+        render_template_page('stallion', 'Stallions', 'Stallion Name')
+    elif page == 'Venues':
+        render_template_page('venue', 'Venues', 'Venue Name')
+    elif page == 'Race Names':
+        render_template_page('race_name', 'Race Names', 'Race Name')
+    elif page == 'Criteria':
+        render_template_page('criteria', 'Criteria', 'Criteria Name')
+
 
 
 if __name__ == "__main__":

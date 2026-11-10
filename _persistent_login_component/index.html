@@ -1,0 +1,102 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<script>
+(function () {
+    "use strict";
+
+    function send(type, extra) {
+        var message = {
+            isStreamlitMessage: true,
+            type: type
+        };
+
+        Object.keys(extra || {}).forEach(function (key) {
+            message[key] = extra[key];
+        });
+
+        window.parent.postMessage(message, "*");
+    }
+
+    function readCookie(name) {
+        var prefix = encodeURIComponent(name) + "=";
+        var parts = document.cookie.split(";");
+
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i].trim();
+
+            if (part.indexOf(prefix) === 0) {
+                return decodeURIComponent(part.substring(prefix.length));
+            }
+        }
+
+        return "";
+    }
+
+    window.addEventListener("message", function (event) {
+        if (event.source !== window.parent) return;
+
+        var message = event.data;
+
+        if (!message || message.type !== "streamlit:render") return;
+
+        var args = message.args || {};
+        var name = args.cookie_name;
+        var result = {
+            request_id: args.request_id,
+            token: "",
+            error: ""
+        };
+
+        try {
+            var secure = location.protocol === "https:" ? "; Secure" : "";
+
+            if (args.operation === "set") {
+                document.cookie =
+                    encodeURIComponent(name) + "=" +
+                    encodeURIComponent(args.token) +
+                    "; Path=/; SameSite=Lax; Max-Age=34560000" +
+                    secure;
+            } else if (args.operation === "delete") {
+                document.cookie =
+                    encodeURIComponent(name) +
+                    "=; Path=/; SameSite=Lax; Max-Age=0" +
+                    secure;
+            }
+
+            result.token = readCookie(name);
+
+            if (
+                args.operation === "set" &&
+                result.token !== args.token
+            ) {
+                result.error =
+                    "The browser did not save the persistent login cookie.";
+            }
+
+            if (
+                args.operation === "delete" &&
+                result.token
+            ) {
+                result.error =
+                    "The browser did not remove the login cookie.";
+            }
+        } catch (error) {
+            result.error = String(error);
+        }
+
+        send("streamlit:setComponentValue", {
+            value: result,
+            dataType: "json"
+        });
+
+        send("streamlit:setFrameHeight", {height: 0});
+    });
+
+    send("streamlit:componentReady", {apiVersion: 1});
+    send("streamlit:setFrameHeight", {height: 0});
+})();
+</script>
+</body>
+</html>
