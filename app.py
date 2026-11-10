@@ -21,74 +21,12 @@ st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session
 # Database
 # -------------------------------------------------
 # OLDER_DEVICE_LIGHTWEIGHT_RENDERING_V1
-def _older_device_lightweight_enabled():
-    return bool(
-        st.session_state.get(
-            "older_device_lightweight_mode",
-            True,
-        )
-    )
 
 
-def render_older_device_settings():
-    st.sidebar.checkbox(
-        "Lightweight mode",
-        value=True,
-        key="older_device_lightweight_mode",
-        help=(
-            "Use text summaries instead of interactive charts. "
-            "Turn off on devices where charts work reliably."
-        ),
-    )
 
 
-def _older_device_render_stacked_summary(
-    title,
-    rows,
-    total,
-    category_count,
-):
-    st.markdown(f"### {title}")
-
-    if not rows or total <= 0:
-        st.info("No matching records.")
-        return
-
-    st.caption(
-        f"{total:,} records across {category_count:,} categories"
-    )
-
-    # Rows are already aggregated and ordered by the existing chart helper.
-    # Use text rather than iframe, Vega, or dataframe rendering.
-    for row in rows[:21]:
-        category = str(row.get("category", "Unknown"))
-        count = row.get("count", 0)
-
-        try:
-            numeric_count = float(count)
-            percentage = numeric_count / total * 100
-            count_text = f"{numeric_count:,.0f}"
-            share_text = f"{percentage:.1f}%"
-        except (TypeError, ValueError, ZeroDivisionError):
-            count_text = str(count)
-            share_text = "N/A"
-
-        st.text(f"{category}: {count_text} ({share_text})")
 
 
-def _older_device_vega_lite_chart(data, *args, **kwargs):
-    if not _older_device_lightweight_enabled():
-        return st.vega_lite_chart(data, *args, **kwargs)
-    st.caption('Weight histogram — lightweight view')
-    if not isinstance(data, pd.DataFrame):
-        st.info('Interactive chart hidden in lightweight mode.')
-        return
-    required_columns = {'from_weight', 'to_weight', 'count'}
-    if not required_columns.issubset(data.columns):
-        st.info('Interactive chart hidden in lightweight mode.')
-        return
-    for lower, upper, count in data[['from_weight', 'to_weight', 'count']].head(60).itertuples(index=False, name=None):
-        st.text(f'{float(lower):,.1f}–{float(upper):,.1f} kg: {int(count):,} records')
 
 
 def get_db_connection():
@@ -2976,6 +2914,60 @@ def filter_checklists(checklists, selected_filters, selected_venue_ids, criteria
 
 
 
+# REVIEW_ARROW_TYPES_AND_WIDTH_FIX_V1
+def _review_arrow_safe_summary(dataframe):
+    # This function receives a newly created display dataframe.
+    # It does not modify the underlying checklist records.
+    if dataframe.empty:
+        return dataframe
+
+    numeric_columns = {
+        "ID",
+        "Days Since Last Race",
+        "Distance",
+        "Previous Distance",
+        "Weight Change (kg)",
+        "Horse Weight (kg)",
+        "Odds",
+        "Program Number",
+        "Number of Horses",
+        "Bracket Number",
+        "Horse Number",
+    }
+
+    for column in dataframe.columns:
+        if column in numeric_columns:
+            numeric = pd.to_numeric(
+                dataframe[column],
+                errors="coerce",
+            )
+
+            # Keep non-finite values out of numeric display columns.
+            numeric = numeric.mask(
+                numeric.isin([float("inf"), float("-inf")])
+            )
+
+            if column == "ID":
+                valid = numeric.dropna()
+
+                if valid.empty or (valid % 1 == 0).all():
+                    dataframe[column] = numeric.astype("Int64")
+                else:
+                    dataframe[column] = numeric.astype("Float64")
+            else:
+                dataframe[column] = numeric.astype("Float64")
+
+        else:
+            # Finishing positions remain text so nonnumeric race outcomes
+            # are preserved. Currency-formatted prize text also stays text.
+            dataframe[column] = (
+                dataframe[column]
+                .astype("string")
+                .fillna("")
+            )
+
+    return dataframe
+
 def build_summary_dataframe(checklists):
     summary_rows = []
 
@@ -3021,7 +3013,7 @@ def build_summary_dataframe(checklists):
             }
         )
 
-    return pd.DataFrame(summary_rows)
+    return _review_arrow_safe_summary(pd.DataFrame(summary_rows))
 
 
 def calculate_review_metrics(filtered_checklists):
@@ -3117,366 +3109,152 @@ def calculate_review_metrics(filtered_checklists):
 # -------------------------------------------------
 # Checklist editor
 # -------------------------------------------------
-def render_checklist_editor(
-    entry,
-    owner_id,
-    horses,
-    horse_owners,
-    jockeys,
-    trainers,
-    breeding_farms,
-    stallions,
-    venues,
-    race_names,
-    criteria,
-):
-    st.subheader(f"Edit Checklist #{entry['id']}")
+# REVIEW_UPDATE_FILTER_AND_WEIGHT_PROTECTION_V1
+def _review_filter_restore_key(owner_id):
+    return f"review_pending_filter_restore_{owner_id}"
 
-    horse_options, horse_ids = make_options(horses, "horse_name")
-    horse_owner_options, horse_owner_ids = make_options(
-        horse_owners,
-        "horse_owner_name",
+
+def _capture_review_update_filter_state(owner_id):
+    from copy import deepcopy
+
+    prefixes = (
+        f"saved_filter_{owner_id}_",
+        f"second_filter_{owner_id}_",
     )
-    jockey_options, jockey_ids = make_options(jockeys, "jockey_name")
-    trainer_options, trainer_ids = make_options(trainers, "trainer_name")
-    breeding_farm_options, breeding_farm_ids = make_options(
-        breeding_farms,
-        "breeding_farm_name",
+
+    return {
+        key: deepcopy(value)
+        for key, value in st.session_state.items()
+        if isinstance(key, str) and key.startswith(prefixes)
+    }
+
+
+def _queue_review_update_filter_restore(owner_id, snapshot):
+    from copy import deepcopy
+
+    st.session_state[_review_filter_restore_key(owner_id)] = deepcopy(
+        snapshot
     )
-    stallion_options, stallion_ids = make_options(stallions, "stallion_name")
-    venue_options, venue_ids = make_options(venues, "venue_name")
-    race_options, race_ids = make_options(race_names, "race_name")
+
+
+def _restore_review_update_filter_state(owner_id):
+    snapshot = st.session_state.pop(
+        _review_filter_restore_key(owner_id),
+        None,
+    )
+
+    if not isinstance(snapshot, dict):
+        return
+
+    prefixes = (
+        f"saved_filter_{owner_id}_",
+        f"second_filter_{owner_id}_",
+    )
+
+    # This runs before Checklist Review creates its widgets.
+    for key, value in snapshot.items():
+        if isinstance(key, str) and key.startswith(prefixes):
+            st.session_state[key] = value
+
+
+def _review_editor_weight_value(
+    entered_weight,
+    existing_weight,
+    clear_weight,
+):
+    if clear_weight:
+        return None
+
+    parsed_weight = to_optional_float(entered_weight)
+
+    if parsed_weight is not None:
+        return parsed_weight
+
+    # Preserve the stored value rather than turning an empty editor value
+    # into a destructive update.
+    return existing_weight
+
+def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trainers, breeding_farms, stallions, venues, race_names, criteria):
+    st.subheader(f"Edit Checklist #{entry['id']}")
+    horse_options, horse_ids = make_options(horses, 'horse_name')
+    horse_owner_options, horse_owner_ids = make_options(horse_owners, 'horse_owner_name')
+    jockey_options, jockey_ids = make_options(jockeys, 'jockey_name')
+    trainer_options, trainer_ids = make_options(trainers, 'trainer_name')
+    breeding_farm_options, breeding_farm_ids = make_options(breeding_farms, 'breeding_farm_name')
+    stallion_options, stallion_ids = make_options(stallions, 'stallion_name')
+    venue_options, venue_ids = make_options(venues, 'venue_name')
+    race_options, race_ids = make_options(race_names, 'race_name')
 
     def selected_index(ids, entry_id):
         return ids.index(entry_id) if entry_id in ids else 0
-
-    existing_date = parse_race_date(entry.get("date_of_race")) or date.today()
-    existing_previous_race_date = parse_race_date(
-        entry.get("previous_race_date")
-    )
-
+    existing_date = parse_race_date(entry.get('date_of_race')) or date.today()
+    existing_previous_race_date = parse_race_date(entry.get('previous_race_date'))
     with st.form(f"edit_checklist_form_{entry['id']}"):
-        edit_horse_idx = st.selectbox(
-            "Horse",
-            range(len(horse_options)),
-            index=selected_index(horse_ids, entry.get("horse_id")),
-            format_func=lambda i: horse_options[i],
-        )
-
-        edit_horse_owner_idx = st.selectbox(
-            "Horse Owner",
-            range(len(horse_owner_options)),
-            index=selected_index(
-                horse_owner_ids,
-                entry.get("horse_owner_id"),
-            ),
-            format_func=lambda i: horse_owner_options[i],
-        )
-
-        edit_jockey_idx = st.selectbox(
-            "Jockey",
-            range(len(jockey_options)),
-            index=selected_index(jockey_ids, entry.get("jockey_id")),
-            format_func=lambda i: jockey_options[i],
-        )
-
-        edit_previous_jockey_idx = st.selectbox(
-            "Previous Jockey",
-            range(len(jockey_options)),
-            index=selected_index(
-                jockey_ids,
-                entry.get("previous_jockey_id"),
-            ),
-            format_func=lambda i: jockey_options[i],
-        )
-
-        edit_trainer_idx = st.selectbox(
-            "Trainer",
-            range(len(trainer_options)),
-            index=selected_index(trainer_ids, entry.get("trainer_id")),
-            format_func=lambda i: trainer_options[i],
-        )
-
-        edit_breeding_farm_idx = st.selectbox(
-            "Breeding Farm",
-            range(len(breeding_farm_options)),
-            index=selected_index(
-                breeding_farm_ids,
-                entry.get("breeding_farm_id"),
-            ),
-            format_func=lambda i: breeding_farm_options[i],
-        )
-
-        edit_stallion_idx = st.selectbox(
-            "Stallion",
-            range(len(stallion_options)),
-            index=selected_index(stallion_ids, entry.get("stallion_id")),
-            format_func=lambda i: stallion_options[i],
-        )
-
-        edit_broodmare_sire_idx = st.selectbox(
-            "Broodmare Sire",
-            range(len(stallion_options)),
-            index=selected_index(
-                stallion_ids,
-                entry.get("broodmare_sire_id"),
-            ),
-            format_func=lambda i: stallion_options[i],
-        )
-
-        edit_venue_idx = st.selectbox(
-            "Venue",
-            range(len(venue_options)),
-            index=selected_index(venue_ids, entry.get("venue_id")),
-            format_func=lambda i: venue_options[i],
-        )
-
-        edit_previous_venue_idx = st.selectbox(
-            "Previous Venue",
-            range(len(venue_options)),
-            index=selected_index(
-                venue_ids,
-                entry.get("previous_venue_id"),
-            ),
-            format_func=lambda i: venue_options[i],
-        )
-
-        edit_race_idx = st.selectbox(
-            "Race Name",
-            range(len(race_options)),
-            index=selected_index(race_ids, entry.get("race_name_id")),
-            format_func=lambda i: race_options[i],
-        )
-
-        edit_distance = st.number_input(
-            "Distance (meters)",
-            min_value=0,
-            max_value=5000,
-            value=int(entry.get("distance") or 0),
-            step=100,
-        )
-
-        edit_previous_distance = st.number_input(
-            "Previous Distance (meters)",
-            min_value=0,
-            max_value=5000,
-            value=int(entry.get("previous_distance") or 0),
-            step=100,
-        )
-
-        edit_date = st.date_input(
-            "Date of Race",
-            value=existing_date,
-        )
-
-        edit_previous_race_date = st.date_input(
-            "Previous Race Date (optional)",
-            min_value=date(1980, 1, 1),
-            max_value=edit_date,
-            value=existing_previous_race_date,
-        )
-
-        edit_interval_days_preview = calculate_interval_days(
-            edit_date,
-            edit_previous_race_date,
-        )
-
+        edit_horse_idx = st.selectbox('Horse', range(len(horse_options)), index=selected_index(horse_ids, entry.get('horse_id')), format_func=lambda i: horse_options[i])
+        edit_horse_owner_idx = st.selectbox('Horse Owner', range(len(horse_owner_options)), index=selected_index(horse_owner_ids, entry.get('horse_owner_id')), format_func=lambda i: horse_owner_options[i])
+        edit_jockey_idx = st.selectbox('Jockey', range(len(jockey_options)), index=selected_index(jockey_ids, entry.get('jockey_id')), format_func=lambda i: jockey_options[i])
+        edit_previous_jockey_idx = st.selectbox('Previous Jockey', range(len(jockey_options)), index=selected_index(jockey_ids, entry.get('previous_jockey_id')), format_func=lambda i: jockey_options[i])
+        edit_trainer_idx = st.selectbox('Trainer', range(len(trainer_options)), index=selected_index(trainer_ids, entry.get('trainer_id')), format_func=lambda i: trainer_options[i])
+        edit_breeding_farm_idx = st.selectbox('Breeding Farm', range(len(breeding_farm_options)), index=selected_index(breeding_farm_ids, entry.get('breeding_farm_id')), format_func=lambda i: breeding_farm_options[i])
+        edit_stallion_idx = st.selectbox('Stallion', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('stallion_id')), format_func=lambda i: stallion_options[i])
+        edit_broodmare_sire_idx = st.selectbox('Broodmare Sire', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('broodmare_sire_id')), format_func=lambda i: stallion_options[i])
+        edit_venue_idx = st.selectbox('Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('venue_id')), format_func=lambda i: venue_options[i])
+        edit_previous_venue_idx = st.selectbox('Previous Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('previous_venue_id')), format_func=lambda i: venue_options[i])
+        edit_race_idx = st.selectbox('Race Name', range(len(race_options)), index=selected_index(race_ids, entry.get('race_name_id')), format_func=lambda i: race_options[i])
+        edit_distance = st.number_input('Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('distance') or 0), step=100)
+        edit_previous_distance = st.number_input('Previous Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('previous_distance') or 0), step=100)
+        edit_date = st.date_input('Date of Race', value=existing_date)
+        edit_previous_race_date = st.date_input('Previous Race Date (optional)', min_value=date(1980, 1, 1), max_value=edit_date, value=existing_previous_race_date)
+        edit_interval_days_preview = calculate_interval_days(edit_date, edit_previous_race_date)
         if edit_interval_days_preview is None:
-            st.caption(
-                "Days Since Last Race: Enter a previous race date to calculate."
-            )
+            st.caption('Days Since Last Race: Enter a previous race date to calculate.')
         else:
-            st.info(
-                f"Days Since Last Race: {edit_interval_days_preview} day(s)"
-            )
-
-        edit_weight_change = st.number_input(
-            "Weight Change (kg) (optional)",
-            min_value=-999.9,
-            max_value=999.9,
-            value=float(entry.get("weight_change") or 0.0),
-            step=0.1,
-            help=(
-                "Enter a negative value for weight loss. "
-                "For weight gain, enter the number without a + sign."
-            ),
-        )
-
-        edit_memo = st.text_area(
-            "Memo",
-            value=entry.get("memo") or "",
-        )
-
-        edit_finished_place = st.text_input(
-            "Finished Place",
-            value=entry.get("finished_place") or "",
-        )
-
+            st.info(f'Days Since Last Race: {edit_interval_days_preview} day(s)')
+        edit_weight_change = st.number_input('Weight Change (kg) (optional)', min_value=-999.9, max_value=999.9, value=float(entry.get('weight_change') or 0.0), step=0.1, help='Enter a negative value for weight loss. For weight gain, enter the number without a + sign.')
+        edit_memo = st.text_area('Memo', value=entry.get('memo') or '')
+        edit_finished_place = st.text_input('Finished Place', value=entry.get('finished_place') or '')
         col1, col2 = st.columns(2)
-
         with col1:
-            edit_program_number = st.number_input(
-                "Program Number (レース番号)",
-                min_value=0,
-                max_value=12,
-                value=int(entry.get("program_number") or 0),
-            )
-
-            edit_number_of_horses = st.number_input(
-                "Number of Horses (出走頭数)",
-                min_value=0,
-                max_value=18,
-                value=int(entry.get("number_of_horses") or 0),
-            )
-
-            edit_odds = st.number_input(
-                "Odds",
-                min_value=0.0,
-                max_value=999.9,
-                value=float(entry.get("odds") or 0.0),
-                step=0.1,
-            )
-
-            edit_prize = st.number_input(
-                "Prize (¥)",
-                min_value=0.0,
-                max_value=1000000000.0,
-                value=float(entry.get("prize") or 0.0),
-                step=1000.0,
-            )
-
+            edit_program_number = st.number_input('Program Number (レース番号)', min_value=0, max_value=12, value=int(entry.get('program_number') or 0))
+            edit_number_of_horses = st.number_input('Number of Horses (出走頭数)', min_value=0, max_value=18, value=int(entry.get('number_of_horses') or 0))
+            edit_odds = st.number_input('Odds', min_value=0.0, max_value=999.9, value=float(entry.get('odds') or 0.0), step=0.1)
+            edit_prize = st.number_input('Prize (¥)', min_value=0.0, max_value=1000000000.0, value=float(entry.get('prize') or 0.0), step=1000.0)
         with col2:
-            edit_bracket_number = st.number_input(
-                "Bracket Number (枠番)",
-                min_value=0,
-                max_value=8,
-                value=int(entry.get("bracket_number") or 0),
-            )
-
-            edit_horse_number = st.number_input(
-                "Horse Number (馬番)",
-                min_value=0,
-                max_value=18,
-                value=int(entry.get("horse_number") or 0),
-            )
-
-            edit_horse_weight = st.number_input(
-                "Horse Weight (kg)",
-                min_value=0.0,
-                max_value=999.9,
-                value=float(entry.get("horse_weight") or 0.0),
-                step=0.1,
-            )
-
-        st.write("Checklist criteria:")
-
+            edit_bracket_number = st.number_input('Bracket Number (枠番)', min_value=0, max_value=8, value=int(entry.get('bracket_number') or 0))
+            edit_horse_number = st.number_input('Horse Number (馬番)', min_value=0, max_value=18, value=int(entry.get('horse_number') or 0))
+            edit_horse_weight = st.number_input('Horse Weight (kg)', min_value=0.0, max_value=999.9, value=float(entry.get('horse_weight') or 0.0), step=0.1)
+            clear_stored_horse_weight = st.checkbox('Clear stored horse weight', value=False, key=f"review_clear_horse_weight_{owner_id}_{entry['id']}", help='Leave unchecked to preserve the stored weight when the weight input is empty or zero.')
+        st.write('Checklist criteria:')
         edit_checklist_data = {}
-        existing_checklist_data = entry.get("checklist") or {}
-
+        existing_checklist_data = entry.get('checklist') or {}
         for criterion in criteria:
-            criterion_name = criterion["criteria_name"]
-            edit_checklist_data[criterion_name] = st.checkbox(
-                criterion_name,
-                value=bool(
-                    existing_checklist_data.get(criterion_name, False)
-                ),
-            )
-
-        update_clicked = st.form_submit_button("Update Checklist")
-
-    delete_clicked = st.button(
-        "Delete This Checklist",
-        key=f"delete_checklist_{entry['id']}",
-        type="secondary",
-    )
-
+            criterion_name = criterion['criteria_name']
+            edit_checklist_data[criterion_name] = st.checkbox(criterion_name, value=bool(existing_checklist_data.get(criterion_name, False)))
+        update_clicked = st.form_submit_button('Update Checklist')
+    delete_clicked = st.button('Delete This Checklist', key=f"delete_checklist_{entry['id']}", type='secondary')
     if update_clicked:
         normalized_edit_date = normalize_date(edit_date)
-        normalized_edit_previous_race_date = normalize_date(
-            edit_previous_race_date
-        )
-
-        if (
-            normalized_edit_previous_race_date
-            and calculate_interval_days(
-                normalized_edit_date,
-                normalized_edit_previous_race_date,
-            )
-            is None
-        ):
-            st.error(
-                "Previous race date cannot be after the current race date."
-            )
+        normalized_edit_previous_race_date = normalize_date(edit_previous_race_date)
+        if normalized_edit_previous_race_date and calculate_interval_days(normalized_edit_date, normalized_edit_previous_race_date) is None:
+            st.error('Previous race date cannot be after the current race date.')
             return
-
-        success, message = update_checklist(
-            checklist_id=entry["id"],
-            owner_id=owner_id,
-            horse_id=get_selected_id(horse_ids, edit_horse_idx),
-            horse_owner_id=get_selected_id(
-                horse_owner_ids,
-                edit_horse_owner_idx,
-            ),
-            jockey_id=get_selected_id(jockey_ids, edit_jockey_idx),
-            previous_jockey_id=get_selected_id(
-                jockey_ids,
-                edit_previous_jockey_idx,
-            ),
-            trainer_id=get_selected_id(trainer_ids, edit_trainer_idx),
-            breeding_farm_id=get_selected_id(
-                breeding_farm_ids,
-                edit_breeding_farm_idx,
-            ),
-            stallion_id=get_selected_id(
-                stallion_ids,
-                edit_stallion_idx,
-            ),
-            broodmare_sire_id=get_selected_id(
-                stallion_ids,
-                edit_broodmare_sire_idx,
-            ),
-            venue_id=get_selected_id(venue_ids, edit_venue_idx),
-            previous_venue_id=get_selected_id(
-                venue_ids,
-                edit_previous_venue_idx,
-            ),
-            race_name_id=get_selected_id(race_ids, edit_race_idx),
-            distance=to_optional_int(edit_distance),
-            previous_distance=to_optional_int(edit_previous_distance),
-            date_of_race=normalized_edit_date,
-            previous_race_date=normalized_edit_previous_race_date,
-            weight_change=to_optional_signed_float(edit_weight_change),
-            memo=clean_text(edit_memo),
-            finished_place=clean_text(edit_finished_place),
-            program_number=to_optional_int(edit_program_number),
-            number_of_horses=to_optional_int(edit_number_of_horses),
-            odds=to_optional_float(edit_odds),
-            prize=to_optional_float(edit_prize),
-            checklist_data=(
-                edit_checklist_data
-                if any(edit_checklist_data.values())
-                else None
-            ),
-            bracket_number=to_optional_int(edit_bracket_number),
-            horse_number=to_optional_int(edit_horse_number),
-            horse_weight=to_optional_float(edit_horse_weight),
-        )
-
+        _review_update_filter_snapshot = _capture_review_update_filter_state(owner_id)
+        success, message = update_checklist(checklist_id=entry['id'], owner_id=owner_id, horse_id=get_selected_id(horse_ids, edit_horse_idx), horse_owner_id=get_selected_id(horse_owner_ids, edit_horse_owner_idx), jockey_id=get_selected_id(jockey_ids, edit_jockey_idx), previous_jockey_id=get_selected_id(jockey_ids, edit_previous_jockey_idx), trainer_id=get_selected_id(trainer_ids, edit_trainer_idx), breeding_farm_id=get_selected_id(breeding_farm_ids, edit_breeding_farm_idx), stallion_id=get_selected_id(stallion_ids, edit_stallion_idx), broodmare_sire_id=get_selected_id(stallion_ids, edit_broodmare_sire_idx), venue_id=get_selected_id(venue_ids, edit_venue_idx), previous_venue_id=get_selected_id(venue_ids, edit_previous_venue_idx), race_name_id=get_selected_id(race_ids, edit_race_idx), distance=to_optional_int(edit_distance), previous_distance=to_optional_int(edit_previous_distance), date_of_race=normalized_edit_date, previous_race_date=normalized_edit_previous_race_date, weight_change=to_optional_signed_float(edit_weight_change), memo=clean_text(edit_memo), finished_place=clean_text(edit_finished_place), program_number=to_optional_int(edit_program_number), number_of_horses=to_optional_int(edit_number_of_horses), odds=to_optional_float(edit_odds), prize=to_optional_float(edit_prize), checklist_data=edit_checklist_data if any(edit_checklist_data.values()) else None, bracket_number=to_optional_int(edit_bracket_number), horse_number=to_optional_int(edit_horse_number), horse_weight=_review_editor_weight_value(edit_horse_weight, entry.get('horse_weight'), clear_stored_horse_weight))
         if success:
             st.success(message)
+            _queue_review_update_filter_restore(owner_id, _review_update_filter_snapshot)
             st.rerun()
         else:
             st.error(message)
-
     if delete_clicked:
-        success, message = delete_checklist(entry["id"], owner_id)
-
+        success, message = delete_checklist(entry['id'], owner_id)
         if success:
             st.success(message)
-            st.session_state.pop("selected_review_checklist_id", None)
+            st.session_state.pop('selected_review_checklist_id', None)
             st.rerun()
         else:
             st.error(message)
+
 
 
 # -------------------------------------------------
@@ -3492,7 +3270,7 @@ def render_second_filter_section(owner_id, first_filtered_checklists, horse_ids,
     with clear_second_col1:
         st.caption('All conditions below are used only to calculate second-filter dominance within the first-filter results.')
     with clear_second_col2:
-        if st.button('Clear Second Filter', key=second_filter_key(owner_id, 'reset_button'), type='secondary', use_container_width=True):
+        if st.button('Clear Second Filter', key=second_filter_key(owner_id, 'reset_button'), type='secondary', width='stretch'):
             reset_second_filter_values(owner_id)
             st.session_state[second_filter_load_version_key(owner_id)] += 1
             st.rerun()
@@ -3612,485 +3390,31 @@ def _review_count_chart_rows(counts, labels, total, top_limit=20):
 # APPLE_TOUCH_STACKED_CHART_TOOLTIP_V1
 # STACKED_BAR_CHART_TEXT_CONTRAST_V1
 def _render_review_stacked_count_chart(title, rows, total, category_count):
-
-    if _older_device_lightweight_enabled():
-        _older_device_render_stacked_summary(
-            title,
-            rows,
-            total,
-            category_count,
-        )
-        return
-
     import json
     import math
     import streamlit.components.v1 as components
-
-    st.markdown(f"### {title}")
-
+    st.markdown(f'### {title}')
     if not rows or total <= 0:
-        st.info("No matching records to chart.")
+        st.info('No matching records to chart.')
         return
-
     largest = rows[0]
-
-    st.caption(
-        f"{total:,} checklist record(s) across {category_count:,} categories. "
-        f"Largest: {largest['category']} — "
-        f"{largest['count']:,} ({largest['share']:.1%})."
-    )
-
-    palette = [
-        "#2563EB", "#F97316", "#10B981", "#EF4444", "#8B5CF6",
-        "#06B6D4", "#D97706", "#DB2777", "#65A30D", "#4F46E5",
-        "#0D9488", "#DC2626", "#9333EA", "#0284C7", "#CA8A04",
-        "#BE185D", "#16A34A", "#7C3AED", "#0891B2", "#EA580C",
-    ]
-
+    st.caption(f"{total:,} checklist record(s) across {category_count:,} categories. Largest: {largest['category']} — {largest['count']:,} ({largest['share']:.1%}).")
+    palette = ['#2563EB', '#F97316', '#10B981', '#EF4444', '#8B5CF6', '#06B6D4', '#D97706', '#DB2777', '#65A30D', '#4F46E5', '#0D9488', '#DC2626', '#9333EA', '#0284C7', '#CA8A04', '#BE185D', '#16A34A', '#7C3AED', '#0891B2', '#EA580C']
     chart_rows = []
-
     for index, row in enumerate(rows):
-        count = float(row["count"])
-
+        count = float(row['count'])
         if not math.isfinite(count) or count <= 0:
             continue
-
-        category = str(row["category"])
-
-        chart_rows.append(
-            {
-                "category": category,
-                "count": count,
-                "share": count / total,
-                "color": (
-                    "#9CA3AF"
-                    if category == "Other (remaining categories)"
-                    else palette[index % len(palette)]
-                ),
-            }
-        )
-
+        category = str(row['category'])
+        chart_rows.append({'category': category, 'count': count, 'share': count / total, 'color': '#9CA3AF' if category == 'Other (remaining categories)' else palette[index % len(palette)]})
     if not chart_rows:
-        st.info("No valid chart counts.")
+        st.info('No valid chart counts.')
         return
+    payload = json.dumps({'title': str(title), 'total': int(total), 'rows': chart_rows}, ensure_ascii=True, allow_nan=False)
+    payload = payload.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    template = '\n<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<style>\n    :root {\n        color-scheme: dark;\n        --foreground: #f8fafc;\n        --background: #111827;\n        --border: #94a3b8;\n        --muted: #cbd5e1;\n    }\n\n    * {\n        box-sizing: border-box;\n    }\n\n    html {\n        color: #f8fafc !important;\n        background: #111827 !important;\n    }\n\n    body {\n        margin: 0;\n        padding: 10px 8px;\n        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n        font-size: 13px;\n        color: #f8fafc !important;\n        background: #111827 !important;\n        -webkit-text-fill-color: #f8fafc;\n    }\n\n    .hint {\n        margin: 0 0 12px;\n        color: #cbd5e1 !important;\n        -webkit-text-fill-color: #cbd5e1 !important;\n        font-size: 12px;\n    }\n\n    .bar {\n        display: flex;\n        width: 100%;\n        height: 48px;\n        overflow: hidden;\n        border-radius: 6px;\n        background: #334155;\n    }\n\n    .segment {\n        display: block;\n        flex-shrink: 0;\n        min-width: 0;\n        height: 100%;\n        margin: 0;\n        padding: 0;\n        border: 0;\n        border-radius: 0;\n        appearance: none;\n        -webkit-appearance: none;\n        -webkit-tap-highlight-color: transparent;\n        touch-action: manipulation;\n        cursor: pointer;\n    }\n\n    .segment:hover,\n    .segment:focus-visible,\n    .segment.selected {\n        box-shadow: inset 0 0 0 3px #ffffff;\n        outline: none;\n    }\n\n    .axis {\n        display: flex;\n        justify-content: space-between;\n        gap: 8px;\n        margin-top: 7px;\n        color: #cbd5e1 !important;\n        font-size: 11px;\n    }\n\n    .axis span {\n        color: #cbd5e1 !important;\n        -webkit-text-fill-color: #cbd5e1 !important;\n    }\n\n    .legend {\n        display: grid;\n        grid-template-columns: repeat(2, minmax(0, 1fr));\n        gap: 6px 12px;\n        margin-top: 16px;\n        max-height: 190px;\n        overflow-y: auto;\n        overscroll-behavior: contain;\n        padding: 3px;\n        color: #f8fafc !important;\n        background: #111827 !important;\n        scrollbar-color: #64748b #111827;\n    }\n\n    .legend-item {\n        display: flex;\n        align-items: center;\n        gap: 7px;\n        min-width: 0;\n        padding: 5px;\n        border: 0;\n        border-radius: 4px;\n        font: inherit;\n        color: #f8fafc !important;\n        -webkit-text-fill-color: #f8fafc !important;\n        background: #111827 !important;\n        text-align: left;\n        cursor: pointer;\n        touch-action: manipulation;\n        opacity: 1;\n    }\n\n    .legend-item:hover {\n        background: #1e293b !important;\n    }\n\n    .legend-item:focus-visible {\n        outline: 2px solid #ffffff;\n        outline-offset: -2px;\n        background: #1e293b !important;\n    }\n\n    .swatch {\n        width: 11px;\n        height: 11px;\n        flex: 0 0 11px;\n        border-radius: 2px;\n    }\n\n    .legend-label {\n        overflow: hidden;\n        text-overflow: ellipsis;\n        white-space: nowrap;\n        font-size: 12px;\n        color: #f8fafc !important;\n        -webkit-text-fill-color: #f8fafc !important;\n    }\n\n    #tooltip {\n        position: fixed;\n        z-index: 1000;\n        max-width: min(300px, calc(100vw - 16px));\n        padding: 11px 13px;\n        border: 1px solid #94a3b8;\n        border-radius: 11px;\n        color: #f8fafc !important;\n        background: #1e293b !important;\n        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);\n        pointer-events: none;\n        overflow-wrap: anywhere;\n        font-size: 13px;\n        line-height: 1.5;\n    }\n\n    #tooltip[hidden] {\n        display: none;\n    }\n\n    #tooltip-title,\n    #tooltip-count,\n    #tooltip-share {\n        color: #f8fafc !important;\n        -webkit-text-fill-color: #f8fafc !important;\n    }\n\n    .tooltip-title {\n        font-weight: 700;\n        margin-bottom: 3px;\n    }\n\n    .tooltip-note {\n        margin-top: 4px;\n        font-size: 11px;\n        color: #cbd5e1 !important;\n        -webkit-text-fill-color: #cbd5e1 !important;\n    }\n</style>\n</head>\n<body>\n<p class="hint">\n    Tap a segment or legend item for details. Tap outside to dismiss.\n</p>\n\n<div id="bar" class="bar" role="group"></div>\n\n<div class="axis" aria-hidden="true">\n    <span>0</span>\n    <span>Checklist record count</span>\n    <span id="total"></span>\n</div>\n\n<div id="legend" class="legend" role="group" aria-label="Chart categories"></div>\n\n<div id="tooltip" role="tooltip" hidden>\n    <div id="tooltip-title" class="tooltip-title"></div>\n    <div id="tooltip-count"></div>\n    <div id="tooltip-share"></div>\n    <div class="tooltip-note">Tap outside to close</div>\n</div>\n\n<script>\n"use strict";\n\nconst chart = __CHART_DATA__;\nconst bar = document.getElementById("bar");\nconst legend = document.getElementById("legend");\nconst tooltip = document.getElementById("tooltip");\nconst segments = [];\nconst numberFormat = new Intl.NumberFormat(undefined, {\n    maximumFractionDigits: 0\n});\nconst percentFormat = new Intl.NumberFormat(undefined, {\n    style: "percent",\n    maximumFractionDigits: 1\n});\n\nlet pinned = false;\nlet activeIndex = null;\nlet anchorElement = null;\n\nbar.setAttribute("aria-label", chart.title);\ndocument.getElementById("total").textContent = numberFormat.format(chart.total);\n\nfunction positionTooltip(element) {\n    const rect = element.getBoundingClientRect();\n\n    tooltip.style.left = "8px";\n    tooltip.style.top = "8px";\n\n    const width = tooltip.offsetWidth;\n    const height = tooltip.offsetHeight;\n    const viewportWidth = document.documentElement.clientWidth;\n    const viewportHeight = document.documentElement.clientHeight;\n\n    const center = rect.left + rect.width / 2;\n    const left = Math.max(\n        8,\n        Math.min(center - width / 2, viewportWidth - width - 8)\n    );\n\n    let top = rect.bottom + 10;\n\n    if (top + height > viewportHeight - 8) {\n        top = rect.top - height - 10;\n    }\n\n    top = Math.max(8, Math.min(top, viewportHeight - height - 8));\n\n    tooltip.style.left = left + "px";\n    tooltip.style.top = top + "px";\n}\n\nfunction showTooltip(index, element) {\n    const row = chart.rows[index];\n\n    if (activeIndex !== null) {\n        segments[activeIndex].classList.remove("selected");\n    }\n\n    activeIndex = index;\n    anchorElement = element;\n    segments[index].classList.add("selected");\n\n    document.getElementById("tooltip-title").textContent = row.category;\n    document.getElementById("tooltip-count").textContent =\n        "Record count: " + numberFormat.format(row.count);\n    document.getElementById("tooltip-share").textContent =\n        "Share: " + percentFormat.format(row.share);\n\n    tooltip.hidden = false;\n    positionTooltip(element);\n}\n\nfunction hideTooltip() {\n    if (activeIndex !== null) {\n        segments[activeIndex].classList.remove("selected");\n    }\n\n    tooltip.hidden = true;\n    activeIndex = null;\n    anchorElement = null;\n    pinned = false;\n}\n\nfunction bindInteractions(element, index) {\n    element.dataset.chartIndex = String(index);\n    element.setAttribute("aria-describedby", "tooltip");\n\n    // Click is the common activation path for touch, mouse, and keyboard.\n    // No preventDefault on touchstart, so vertical page scrolling remains usable.\n    element.addEventListener("click", function(event) {\n        event.stopPropagation();\n        pinned = true;\n        showTooltip(index, element);\n    });\n\n    element.addEventListener("pointerenter", function(event) {\n        if (event.pointerType === "mouse" && !pinned) {\n            showTooltip(index, element);\n        }\n    });\n\n    element.addEventListener("pointerleave", function(event) {\n        if (event.pointerType === "mouse" && !pinned) {\n            hideTooltip();\n        }\n    });\n\n    element.addEventListener("focus", function() {\n        if (!pinned) {\n            showTooltip(index, element);\n        }\n    });\n\n    element.addEventListener("blur", function() {\n        if (!pinned) {\n            hideTooltip();\n        }\n    });\n}\n\nchart.rows.forEach(function(row, index) {\n    const label =\n        row.category + ": " +\n        numberFormat.format(row.count) + " records, " +\n        percentFormat.format(row.share);\n\n    const segment = document.createElement("button");\n    segment.type = "button";\n    segment.className = "segment";\n    segment.style.width = (row.share * 100) + "%";\n    segment.style.backgroundColor = row.color;\n    segment.setAttribute("aria-label", label);\n\n    segments.push(segment);\n    bindInteractions(segment, index);\n    bar.appendChild(segment);\n\n    // Legend buttons also expose very narrow segments to touch users.\n    const legendItem = document.createElement("button");\n    legendItem.type = "button";\n    legendItem.className = "legend-item";\n    legendItem.setAttribute("aria-label", label);\n\n    const swatch = document.createElement("span");\n    swatch.className = "swatch";\n    swatch.style.backgroundColor = row.color;\n    swatch.setAttribute("aria-hidden", "true");\n\n    const legendLabel = document.createElement("span");\n    legendLabel.className = "legend-label";\n    legendLabel.textContent =\n        row.category + " (" + numberFormat.format(row.count) + ")";\n\n    legendItem.appendChild(swatch);\n    legendItem.appendChild(legendLabel);\n    bindInteractions(legendItem, index);\n    legend.appendChild(legendItem);\n});\n\ndocument.addEventListener("click", function(event) {\n    if (!event.target.closest("[data-chart-index]")) {\n        hideTooltip();\n    }\n});\n\ndocument.addEventListener("keydown", function(event) {\n    if (event.key === "Escape") {\n        hideTooltip();\n    }\n});\n\nwindow.addEventListener("resize", function() {\n    if (!tooltip.hidden && anchorElement) {\n        positionTooltip(anchorElement);\n    }\n});\n\ndocument.addEventListener("scroll", function() {\n    if (!tooltip.hidden && anchorElement) {\n        positionTooltip(anchorElement);\n    }\n}, true);\n</script>\n</body>\n</html>\n'
+    components.html(template.replace('__CHART_DATA__', payload), height=355, scrolling=False)
 
-    payload = json.dumps(
-        {
-            "title": str(title),
-            "total": int(total),
-            "rows": chart_rows,
-        },
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-
-    # Prevent data values from terminating the embedded script element.
-    payload = (
-        payload.replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
-
-    template = """
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-    :root {
-        color-scheme: dark;
-        --foreground: #f8fafc;
-        --background: #111827;
-        --border: #94a3b8;
-        --muted: #cbd5e1;
-    }
-
-    * {
-        box-sizing: border-box;
-    }
-
-    html {
-        color: #f8fafc !important;
-        background: #111827 !important;
-    }
-
-    body {
-        margin: 0;
-        padding: 10px 8px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-size: 13px;
-        color: #f8fafc !important;
-        background: #111827 !important;
-        -webkit-text-fill-color: #f8fafc;
-    }
-
-    .hint {
-        margin: 0 0 12px;
-        color: #cbd5e1 !important;
-        -webkit-text-fill-color: #cbd5e1 !important;
-        font-size: 12px;
-    }
-
-    .bar {
-        display: flex;
-        width: 100%;
-        height: 48px;
-        overflow: hidden;
-        border-radius: 6px;
-        background: #334155;
-    }
-
-    .segment {
-        display: block;
-        flex-shrink: 0;
-        min-width: 0;
-        height: 100%;
-        margin: 0;
-        padding: 0;
-        border: 0;
-        border-radius: 0;
-        appearance: none;
-        -webkit-appearance: none;
-        -webkit-tap-highlight-color: transparent;
-        touch-action: manipulation;
-        cursor: pointer;
-    }
-
-    .segment:hover,
-    .segment:focus-visible,
-    .segment.selected {
-        box-shadow: inset 0 0 0 3px #ffffff;
-        outline: none;
-    }
-
-    .axis {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin-top: 7px;
-        color: #cbd5e1 !important;
-        font-size: 11px;
-    }
-
-    .axis span {
-        color: #cbd5e1 !important;
-        -webkit-text-fill-color: #cbd5e1 !important;
-    }
-
-    .legend {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 6px 12px;
-        margin-top: 16px;
-        max-height: 190px;
-        overflow-y: auto;
-        overscroll-behavior: contain;
-        padding: 3px;
-        color: #f8fafc !important;
-        background: #111827 !important;
-        scrollbar-color: #64748b #111827;
-    }
-
-    .legend-item {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        min-width: 0;
-        padding: 5px;
-        border: 0;
-        border-radius: 4px;
-        font: inherit;
-        color: #f8fafc !important;
-        -webkit-text-fill-color: #f8fafc !important;
-        background: #111827 !important;
-        text-align: left;
-        cursor: pointer;
-        touch-action: manipulation;
-        opacity: 1;
-    }
-
-    .legend-item:hover {
-        background: #1e293b !important;
-    }
-
-    .legend-item:focus-visible {
-        outline: 2px solid #ffffff;
-        outline-offset: -2px;
-        background: #1e293b !important;
-    }
-
-    .swatch {
-        width: 11px;
-        height: 11px;
-        flex: 0 0 11px;
-        border-radius: 2px;
-    }
-
-    .legend-label {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        color: #f8fafc !important;
-        -webkit-text-fill-color: #f8fafc !important;
-    }
-
-    #tooltip {
-        position: fixed;
-        z-index: 1000;
-        max-width: min(300px, calc(100vw - 16px));
-        padding: 11px 13px;
-        border: 1px solid #94a3b8;
-        border-radius: 11px;
-        color: #f8fafc !important;
-        background: #1e293b !important;
-        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
-        pointer-events: none;
-        overflow-wrap: anywhere;
-        font-size: 13px;
-        line-height: 1.5;
-    }
-
-    #tooltip[hidden] {
-        display: none;
-    }
-
-    #tooltip-title,
-    #tooltip-count,
-    #tooltip-share {
-        color: #f8fafc !important;
-        -webkit-text-fill-color: #f8fafc !important;
-    }
-
-    .tooltip-title {
-        font-weight: 700;
-        margin-bottom: 3px;
-    }
-
-    .tooltip-note {
-        margin-top: 4px;
-        font-size: 11px;
-        color: #cbd5e1 !important;
-        -webkit-text-fill-color: #cbd5e1 !important;
-    }
-</style>
-</head>
-<body>
-<p class="hint">
-    Tap a segment or legend item for details. Tap outside to dismiss.
-</p>
-
-<div id="bar" class="bar" role="group"></div>
-
-<div class="axis" aria-hidden="true">
-    <span>0</span>
-    <span>Checklist record count</span>
-    <span id="total"></span>
-</div>
-
-<div id="legend" class="legend" role="group" aria-label="Chart categories"></div>
-
-<div id="tooltip" role="tooltip" hidden>
-    <div id="tooltip-title" class="tooltip-title"></div>
-    <div id="tooltip-count"></div>
-    <div id="tooltip-share"></div>
-    <div class="tooltip-note">Tap outside to close</div>
-</div>
-
-<script>
-"use strict";
-
-const chart = __CHART_DATA__;
-const bar = document.getElementById("bar");
-const legend = document.getElementById("legend");
-const tooltip = document.getElementById("tooltip");
-const segments = [];
-const numberFormat = new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: 0
-});
-const percentFormat = new Intl.NumberFormat(undefined, {
-    style: "percent",
-    maximumFractionDigits: 1
-});
-
-let pinned = false;
-let activeIndex = null;
-let anchorElement = null;
-
-bar.setAttribute("aria-label", chart.title);
-document.getElementById("total").textContent = numberFormat.format(chart.total);
-
-function positionTooltip(element) {
-    const rect = element.getBoundingClientRect();
-
-    tooltip.style.left = "8px";
-    tooltip.style.top = "8px";
-
-    const width = tooltip.offsetWidth;
-    const height = tooltip.offsetHeight;
-    const viewportWidth = document.documentElement.clientWidth;
-    const viewportHeight = document.documentElement.clientHeight;
-
-    const center = rect.left + rect.width / 2;
-    const left = Math.max(
-        8,
-        Math.min(center - width / 2, viewportWidth - width - 8)
-    );
-
-    let top = rect.bottom + 10;
-
-    if (top + height > viewportHeight - 8) {
-        top = rect.top - height - 10;
-    }
-
-    top = Math.max(8, Math.min(top, viewportHeight - height - 8));
-
-    tooltip.style.left = left + "px";
-    tooltip.style.top = top + "px";
-}
-
-function showTooltip(index, element) {
-    const row = chart.rows[index];
-
-    if (activeIndex !== null) {
-        segments[activeIndex].classList.remove("selected");
-    }
-
-    activeIndex = index;
-    anchorElement = element;
-    segments[index].classList.add("selected");
-
-    document.getElementById("tooltip-title").textContent = row.category;
-    document.getElementById("tooltip-count").textContent =
-        "Record count: " + numberFormat.format(row.count);
-    document.getElementById("tooltip-share").textContent =
-        "Share: " + percentFormat.format(row.share);
-
-    tooltip.hidden = false;
-    positionTooltip(element);
-}
-
-function hideTooltip() {
-    if (activeIndex !== null) {
-        segments[activeIndex].classList.remove("selected");
-    }
-
-    tooltip.hidden = true;
-    activeIndex = null;
-    anchorElement = null;
-    pinned = false;
-}
-
-function bindInteractions(element, index) {
-    element.dataset.chartIndex = String(index);
-    element.setAttribute("aria-describedby", "tooltip");
-
-    // Click is the common activation path for touch, mouse, and keyboard.
-    // No preventDefault on touchstart, so vertical page scrolling remains usable.
-    element.addEventListener("click", function(event) {
-        event.stopPropagation();
-        pinned = true;
-        showTooltip(index, element);
-    });
-
-    element.addEventListener("pointerenter", function(event) {
-        if (event.pointerType === "mouse" && !pinned) {
-            showTooltip(index, element);
-        }
-    });
-
-    element.addEventListener("pointerleave", function(event) {
-        if (event.pointerType === "mouse" && !pinned) {
-            hideTooltip();
-        }
-    });
-
-    element.addEventListener("focus", function() {
-        if (!pinned) {
-            showTooltip(index, element);
-        }
-    });
-
-    element.addEventListener("blur", function() {
-        if (!pinned) {
-            hideTooltip();
-        }
-    });
-}
-
-chart.rows.forEach(function(row, index) {
-    const label =
-        row.category + ": " +
-        numberFormat.format(row.count) + " records, " +
-        percentFormat.format(row.share);
-
-    const segment = document.createElement("button");
-    segment.type = "button";
-    segment.className = "segment";
-    segment.style.width = (row.share * 100) + "%";
-    segment.style.backgroundColor = row.color;
-    segment.setAttribute("aria-label", label);
-
-    segments.push(segment);
-    bindInteractions(segment, index);
-    bar.appendChild(segment);
-
-    // Legend buttons also expose very narrow segments to touch users.
-    const legendItem = document.createElement("button");
-    legendItem.type = "button";
-    legendItem.className = "legend-item";
-    legendItem.setAttribute("aria-label", label);
-
-    const swatch = document.createElement("span");
-    swatch.className = "swatch";
-    swatch.style.backgroundColor = row.color;
-    swatch.setAttribute("aria-hidden", "true");
-
-    const legendLabel = document.createElement("span");
-    legendLabel.className = "legend-label";
-    legendLabel.textContent =
-        row.category + " (" + numberFormat.format(row.count) + ")";
-
-    legendItem.appendChild(swatch);
-    legendItem.appendChild(legendLabel);
-    bindInteractions(legendItem, index);
-    legend.appendChild(legendItem);
-});
-
-document.addEventListener("click", function(event) {
-    if (!event.target.closest("[data-chart-index]")) {
-        hideTooltip();
-    }
-});
-
-document.addEventListener("keydown", function(event) {
-    if (event.key === "Escape") {
-        hideTooltip();
-    }
-});
-
-window.addEventListener("resize", function() {
-    if (!tooltip.hidden && anchorElement) {
-        positionTooltip(anchorElement);
-    }
-});
-
-document.addEventListener("scroll", function() {
-    if (!tooltip.hidden && anchorElement) {
-        positionTooltip(anchorElement);
-    }
-}, true);
-</script>
-</body>
-</html>
-"""
-
-    components.html(
-        template.replace("__CHART_DATA__", payload),
-        height=355,
-        scrolling=False,
-    )
 
 
 
@@ -4503,7 +3827,7 @@ def render_review_filter_history(owner_id):
             disabled=position <= 0,
             on_click=_navigate_review_filter_history,
             args=(owner_id, -1),
-            use_container_width=True,
+            width='stretch',
         )
 
     with next_column:
@@ -4514,7 +3838,7 @@ def render_review_filter_history(owner_id):
             disabled=position >= len(entries) - 1,
             on_click=_navigate_review_filter_history,
             args=(owner_id, 1),
-            use_container_width=True,
+            width='stretch',
         )
 
     with clear_column:
@@ -4529,7 +3853,7 @@ def render_review_filter_history(owner_id):
                 "Remove previous and forward history while keeping "
                 "the currently applied filters."
             ),
-            use_container_width=True,
+            width='stretch',
         )
 
     st.caption(
@@ -4548,406 +3872,18 @@ def render_review_filter_history(owner_id):
 def _render_touch_weight_histogram(data, spec=None, **kwargs):
     import json
     import streamlit.components.v1 as components
-
-    # Keep the existing older-device text fallback.
-    lightweight_check = globals().get("_older_device_lightweight_enabled")
-    lightweight_renderer = globals().get("_older_device_vega_lite_chart")
-
-    if (
-        callable(lightweight_check)
-        and lightweight_check()
-        and callable(lightweight_renderer)
-    ):
-        return lightweight_renderer(data, spec=spec, **kwargs)
-
-    bins = [
-        {
-            "lower": float(lower),
-            "upper": float(upper),
-            "count": int(count),
-        }
-        for lower, upper, count in data[
-            ["from_weight", "to_weight", "count"]
-        ].itertuples(index=False, name=None)
-    ]
-
+    bins = [{'lower': float(lower), 'upper': float(upper), 'count': int(count)} for lower, upper, count in data[['from_weight', 'to_weight', 'count']].itertuples(index=False, name=None)]
     references = []
-
-    for layer in (spec or {}).get("layer", []):
-        values = layer.get("data", {}).get("values", [])
-
+    for layer in (spec or {}).get('layer', []):
+        values = layer.get('data', {}).get('values', [])
         for value in values:
-            if "weight" in value and "reference" in value:
-                references.append(
-                    {
-                        "weight": float(value["weight"]),
-                        "label": str(value["reference"]),
-                    }
-                )
+            if 'weight' in value and 'reference' in value:
+                references.append({'weight': float(value['weight']), 'label': str(value['reference'])})
+    payload = json.dumps({'bins': bins, 'references': references}, ensure_ascii=True, allow_nan=False)
+    payload = payload.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    template = '\n<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n<style>\n* { box-sizing: border-box; }\nhtml, body {\n    margin: 0;\n    background: #111827;\n    color: #f8fafc;\n    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;\n    color-scheme: dark;\n}\nbody { padding: 10px; }\n.hint {\n    font-size: 12px;\n    color: #cbd5e1;\n    margin: 0 0 8px;\n}\nsvg {\n    display: block;\n    width: 100%;\n    height: 235px;\n    overflow: visible;\n}\n.hit {\n    cursor: pointer;\n    touch-action: manipulation;\n    -webkit-tap-highlight-color: transparent;\n}\n.hit:focus { outline: none; }\n.highlight { stroke: #ffffff; stroke-width: 2; }\n.legend {\n    display: flex;\n    flex-wrap: wrap;\n    gap: 6px 14px;\n    font-size: 12px;\n    margin: 4px 0 10px;\n}\nlabel { display: block; font-size: 12px; margin-bottom: 5px; }\nselect {\n    width: 100%;\n    min-height: 42px;\n    padding: 8px;\n    border: 1px solid #94a3b8;\n    border-radius: 6px;\n    background: #1e293b;\n    color: #f8fafc;\n    font-size: 16px;\n}\n#tip {\n    position: fixed;\n    z-index: 10;\n    max-width: calc(100vw - 20px);\n    padding: 10px 13px;\n    border: 1px solid #94a3b8;\n    border-radius: 10px;\n    background: #1e293b;\n    color: #ffffff;\n    box-shadow: 0 5px 18px rgba(0,0,0,.4);\n    font-size: 13px;\n    line-height: 1.5;\n    pointer-events: none;\n}\n#tip[hidden] { display: none; }\n#tip-title { font-weight: 700; }\n</style>\n</head>\n<body>\n<p class="hint">Tap a bar for its 5 kg range and record count.</p>\n<svg id="chart" role="group" aria-label="Horse-weight histogram"></svg>\n<div id="legend" class="legend"></div>\n<label for="range">Select a range, including empty bins</label>\n<select id="range">\n    <option value="">Select a 5 kg range</option>\n</select>\n<div id="tip" role="tooltip" hidden>\n    <div id="tip-title"></div>\n    <div id="tip-count"></div>\n    <div id="tip-boundary"></div>\n</div>\n<script>\n"use strict";\nconst data = __DATA__;\nconst svg = document.getElementById("chart");\nconst tip = document.getElementById("tip");\nconst selector = document.getElementById("range");\nconst ns = "http://www.w3.org/2000/svg";\nconst colors = {\n    "Mean": "#fbbf24",\n    "Mean - 1 SD": "#f472b6",\n    "Mean + 1 SD": "#34d399"\n};\nlet pinned = false;\nlet active = null;\nlet activeAnchor = null;\nlet bars = [];\n\nfunction element(tag, attributes, text) {\n    const item = document.createElementNS(ns, tag);\n    Object.keys(attributes).forEach(function(key) {\n        item.setAttribute(key, attributes[key]);\n    });\n    if (text !== undefined) item.textContent = text;\n    svg.appendChild(item);\n    return item;\n}\n\nfunction positionTip(anchor) {\n    const rect = anchor.getBoundingClientRect();\n    tip.style.left = "10px";\n    tip.style.top = "10px";\n    const width = tip.offsetWidth;\n    const height = tip.offsetHeight;\n    const vw = document.documentElement.clientWidth;\n    const vh = document.documentElement.clientHeight;\n    const left = Math.max(\n        10,\n        Math.min(rect.left + rect.width / 2 - width / 2, vw - width - 10)\n    );\n    let top = rect.top - height - 8;\n    if (top < 8) top = rect.bottom + 8;\n    top = Math.max(8, Math.min(top, vh - height - 8));\n    tip.style.left = left + "px";\n    tip.style.top = top + "px";\n}\n\nfunction show(index, anchor) {\n    const bin = data.bins[index];\n    if (active !== null) bars[active].classList.remove("highlight");\n    active = index;\n    activeAnchor = anchor;\n    bars[index].classList.add("highlight");\n\n    document.getElementById("tip-title").textContent =\n        bin.lower + "–" + bin.upper + " kg";\n    document.getElementById("tip-count").textContent =\n        "Records: " + bin.count.toLocaleString();\n    document.getElementById("tip-boundary").textContent =\n        index === data.bins.length - 1\n        ? "Both endpoints included"\n        : "Lower bound included; upper bound excluded";\n\n    tip.hidden = false;\n    positionTip(anchor);\n}\n\nfunction hide() {\n    if (active !== null) bars[active].classList.remove("highlight");\n    active = null;\n    activeAnchor = null;\n    pinned = false;\n    tip.hidden = true;\n}\n\ndata.bins.forEach(function(bin, index) {\n    const option = document.createElement("option");\n    option.value = String(index);\n    option.textContent =\n        bin.lower + "–" + bin.upper + " kg — " + bin.count + " records";\n    selector.appendChild(option);\n});\n\nselector.addEventListener("change", function() {\n    if (selector.value === "") {\n        hide();\n        return;\n    }\n    pinned = true;\n    show(Number(selector.value), selector);\n});\n\nfunction draw() {\n    hide();\n    svg.replaceChildren();\n    bars = [];\n\n    const width = Math.max(280, svg.clientWidth);\n    const height = 235;\n    const left = 38;\n    const right = 10;\n    const top = 14;\n    const bottom = 42;\n    const plotWidth = width - left - right;\n    const plotHeight = height - top - bottom;\n    const maximum = Math.max(1, ...data.bins.map(function(b) {\n        return b.count;\n    }));\n    const upperCount = Math.max(1, Math.ceil(maximum * 1.12));\n    const x = function(weight) {\n        return left + (weight - 350) / 300 * plotWidth;\n    };\n    const y = function(count) {\n        return top + plotHeight - count / upperCount * plotHeight;\n    };\n\n    svg.setAttribute("viewBox", "0 0 " + width + " " + height);\n\n    const ticks = [...new Set([\n        0,\n        Math.round(upperCount / 2),\n        upperCount\n    ])];\n\n    ticks.forEach(function(tick) {\n        element("line", {\n            x1: left, x2: width - right,\n            y1: y(tick), y2: y(tick),\n            stroke: "#334155"\n        });\n        element("text", {\n            x: left - 6, y: y(tick) + 4,\n            "text-anchor": "end",\n            fill: "#cbd5e1", "font-size": 11\n        }, tick);\n    });\n\n    [350, 400, 450, 500, 550, 600, 650].forEach(function(tick) {\n        element("text", {\n            x: x(tick), y: height - 24,\n            "text-anchor": "middle",\n            fill: "#f8fafc", "font-size": 10\n        }, tick);\n    });\n\n    element("text", {\n        x: left + plotWidth / 2, y: height - 5,\n        "text-anchor": "middle",\n        fill: "#cbd5e1", "font-size": 11\n    }, "Horse weight (kg)");\n\n    element("text", {\n        x: left, y: 10,\n        fill: "#cbd5e1", "font-size": 10\n    }, "Records");\n\n    data.bins.forEach(function(bin) {\n        const bar = element("rect", {\n            x: x(bin.lower) + 0.5,\n            y: y(bin.count),\n            width: Math.max(0.5, x(bin.upper) - x(bin.lower) - 1),\n            height: top + plotHeight - y(bin.count),\n            fill: "#60a5fa"\n        });\n        bars.push(bar);\n    });\n\n    data.references.forEach(function(reference) {\n        if (reference.weight < 350 || reference.weight > 650) return;\n        element("line", {\n            x1: x(reference.weight), x2: x(reference.weight),\n            y1: top, y2: top + plotHeight,\n            stroke: colors[reference.label] || "#ffffff",\n            "stroke-width": 2,\n            "pointer-events": "none"\n        });\n    });\n\n    // Full-height transparent targets also allow empty bins to be tapped.\n    data.bins.forEach(function(bin, index) {\n        const hit = element("rect", {\n            x: x(bin.lower),\n            y: top,\n            width: x(bin.upper) - x(bin.lower),\n            height: plotHeight,\n            fill: "transparent",\n            class: "hit",\n            tabindex: 0,\n            role: "button",\n            "aria-label":\n                bin.lower + " to " + bin.upper + " kg, " +\n                bin.count + " records",\n            "aria-describedby": "tip"\n        });\n\n        hit.addEventListener("click", function(event) {\n            event.stopPropagation();\n            pinned = true;\n            selector.value = String(index);\n            show(index, hit);\n        });\n\n        hit.addEventListener("pointerenter", function(event) {\n            if (event.pointerType === "mouse" && !pinned) show(index, hit);\n        });\n\n        hit.addEventListener("pointerleave", function(event) {\n            if (event.pointerType === "mouse" && !pinned) hide();\n        });\n\n        hit.addEventListener("focus", function() {\n            if (!pinned) show(index, hit);\n        });\n\n        hit.addEventListener("blur", function() {\n            if (!pinned) hide();\n        });\n\n        hit.addEventListener("keydown", function(event) {\n            if (event.key === "Enter" || event.key === " ") {\n                event.preventDefault();\n                pinned = true;\n                selector.value = String(index);\n                show(index, hit);\n            }\n        });\n    });\n}\n\nconst legend = document.getElementById("legend");\ndata.references.forEach(function(reference) {\n    const item = document.createElement("span");\n    item.style.color = colors[reference.label] || "#ffffff";\n    item.textContent =\n        reference.label + ": " + reference.weight.toFixed(1) + " kg";\n    legend.appendChild(item);\n});\n\ndocument.addEventListener("click", function(event) {\n    if (\n        !event.target.closest(".hit") &&\n        !event.target.closest("#range")\n    ) hide();\n});\n\ndocument.addEventListener("keydown", function(event) {\n    if (event.key === "Escape") hide();\n});\n\nlet resizeTimer;\nwindow.addEventListener("resize", function() {\n    clearTimeout(resizeTimer);\n    resizeTimer = setTimeout(draw, 100);\n});\n\ndraw();\n</script>\n</body>\n</html>\n'
+    components.html(template.replace('__DATA__', payload), height=440, scrolling=False)
 
-    payload = json.dumps(
-        {
-            "bins": bins,
-            "references": references,
-        },
-        ensure_ascii=True,
-        allow_nan=False,
-    )
-
-    payload = (
-        payload.replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
-
-    template = """
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-* { box-sizing: border-box; }
-html, body {
-    margin: 0;
-    background: #111827;
-    color: #f8fafc;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color-scheme: dark;
-}
-body { padding: 10px; }
-.hint {
-    font-size: 12px;
-    color: #cbd5e1;
-    margin: 0 0 8px;
-}
-svg {
-    display: block;
-    width: 100%;
-    height: 235px;
-    overflow: visible;
-}
-.hit {
-    cursor: pointer;
-    touch-action: manipulation;
-    -webkit-tap-highlight-color: transparent;
-}
-.hit:focus { outline: none; }
-.highlight { stroke: #ffffff; stroke-width: 2; }
-.legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 14px;
-    font-size: 12px;
-    margin: 4px 0 10px;
-}
-label { display: block; font-size: 12px; margin-bottom: 5px; }
-select {
-    width: 100%;
-    min-height: 42px;
-    padding: 8px;
-    border: 1px solid #94a3b8;
-    border-radius: 6px;
-    background: #1e293b;
-    color: #f8fafc;
-    font-size: 16px;
-}
-#tip {
-    position: fixed;
-    z-index: 10;
-    max-width: calc(100vw - 20px);
-    padding: 10px 13px;
-    border: 1px solid #94a3b8;
-    border-radius: 10px;
-    background: #1e293b;
-    color: #ffffff;
-    box-shadow: 0 5px 18px rgba(0,0,0,.4);
-    font-size: 13px;
-    line-height: 1.5;
-    pointer-events: none;
-}
-#tip[hidden] { display: none; }
-#tip-title { font-weight: 700; }
-</style>
-</head>
-<body>
-<p class="hint">Tap a bar for its 5 kg range and record count.</p>
-<svg id="chart" role="group" aria-label="Horse-weight histogram"></svg>
-<div id="legend" class="legend"></div>
-<label for="range">Select a range, including empty bins</label>
-<select id="range">
-    <option value="">Select a 5 kg range</option>
-</select>
-<div id="tip" role="tooltip" hidden>
-    <div id="tip-title"></div>
-    <div id="tip-count"></div>
-    <div id="tip-boundary"></div>
-</div>
-<script>
-"use strict";
-const data = __DATA__;
-const svg = document.getElementById("chart");
-const tip = document.getElementById("tip");
-const selector = document.getElementById("range");
-const ns = "http://www.w3.org/2000/svg";
-const colors = {
-    "Mean": "#fbbf24",
-    "Mean - 1 SD": "#f472b6",
-    "Mean + 1 SD": "#34d399"
-};
-let pinned = false;
-let active = null;
-let activeAnchor = null;
-let bars = [];
-
-function element(tag, attributes, text) {
-    const item = document.createElementNS(ns, tag);
-    Object.keys(attributes).forEach(function(key) {
-        item.setAttribute(key, attributes[key]);
-    });
-    if (text !== undefined) item.textContent = text;
-    svg.appendChild(item);
-    return item;
-}
-
-function positionTip(anchor) {
-    const rect = anchor.getBoundingClientRect();
-    tip.style.left = "10px";
-    tip.style.top = "10px";
-    const width = tip.offsetWidth;
-    const height = tip.offsetHeight;
-    const vw = document.documentElement.clientWidth;
-    const vh = document.documentElement.clientHeight;
-    const left = Math.max(
-        10,
-        Math.min(rect.left + rect.width / 2 - width / 2, vw - width - 10)
-    );
-    let top = rect.top - height - 8;
-    if (top < 8) top = rect.bottom + 8;
-    top = Math.max(8, Math.min(top, vh - height - 8));
-    tip.style.left = left + "px";
-    tip.style.top = top + "px";
-}
-
-function show(index, anchor) {
-    const bin = data.bins[index];
-    if (active !== null) bars[active].classList.remove("highlight");
-    active = index;
-    activeAnchor = anchor;
-    bars[index].classList.add("highlight");
-
-    document.getElementById("tip-title").textContent =
-        bin.lower + "–" + bin.upper + " kg";
-    document.getElementById("tip-count").textContent =
-        "Records: " + bin.count.toLocaleString();
-    document.getElementById("tip-boundary").textContent =
-        index === data.bins.length - 1
-        ? "Both endpoints included"
-        : "Lower bound included; upper bound excluded";
-
-    tip.hidden = false;
-    positionTip(anchor);
-}
-
-function hide() {
-    if (active !== null) bars[active].classList.remove("highlight");
-    active = null;
-    activeAnchor = null;
-    pinned = false;
-    tip.hidden = true;
-}
-
-data.bins.forEach(function(bin, index) {
-    const option = document.createElement("option");
-    option.value = String(index);
-    option.textContent =
-        bin.lower + "–" + bin.upper + " kg — " + bin.count + " records";
-    selector.appendChild(option);
-});
-
-selector.addEventListener("change", function() {
-    if (selector.value === "") {
-        hide();
-        return;
-    }
-    pinned = true;
-    show(Number(selector.value), selector);
-});
-
-function draw() {
-    hide();
-    svg.replaceChildren();
-    bars = [];
-
-    const width = Math.max(280, svg.clientWidth);
-    const height = 235;
-    const left = 38;
-    const right = 10;
-    const top = 14;
-    const bottom = 42;
-    const plotWidth = width - left - right;
-    const plotHeight = height - top - bottom;
-    const maximum = Math.max(1, ...data.bins.map(function(b) {
-        return b.count;
-    }));
-    const upperCount = Math.max(1, Math.ceil(maximum * 1.12));
-    const x = function(weight) {
-        return left + (weight - 350) / 300 * plotWidth;
-    };
-    const y = function(count) {
-        return top + plotHeight - count / upperCount * plotHeight;
-    };
-
-    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-
-    const ticks = [...new Set([
-        0,
-        Math.round(upperCount / 2),
-        upperCount
-    ])];
-
-    ticks.forEach(function(tick) {
-        element("line", {
-            x1: left, x2: width - right,
-            y1: y(tick), y2: y(tick),
-            stroke: "#334155"
-        });
-        element("text", {
-            x: left - 6, y: y(tick) + 4,
-            "text-anchor": "end",
-            fill: "#cbd5e1", "font-size": 11
-        }, tick);
-    });
-
-    [350, 400, 450, 500, 550, 600, 650].forEach(function(tick) {
-        element("text", {
-            x: x(tick), y: height - 24,
-            "text-anchor": "middle",
-            fill: "#f8fafc", "font-size": 10
-        }, tick);
-    });
-
-    element("text", {
-        x: left + plotWidth / 2, y: height - 5,
-        "text-anchor": "middle",
-        fill: "#cbd5e1", "font-size": 11
-    }, "Horse weight (kg)");
-
-    element("text", {
-        x: left, y: 10,
-        fill: "#cbd5e1", "font-size": 10
-    }, "Records");
-
-    data.bins.forEach(function(bin) {
-        const bar = element("rect", {
-            x: x(bin.lower) + 0.5,
-            y: y(bin.count),
-            width: Math.max(0.5, x(bin.upper) - x(bin.lower) - 1),
-            height: top + plotHeight - y(bin.count),
-            fill: "#60a5fa"
-        });
-        bars.push(bar);
-    });
-
-    data.references.forEach(function(reference) {
-        if (reference.weight < 350 || reference.weight > 650) return;
-        element("line", {
-            x1: x(reference.weight), x2: x(reference.weight),
-            y1: top, y2: top + plotHeight,
-            stroke: colors[reference.label] || "#ffffff",
-            "stroke-width": 2,
-            "pointer-events": "none"
-        });
-    });
-
-    // Full-height transparent targets also allow empty bins to be tapped.
-    data.bins.forEach(function(bin, index) {
-        const hit = element("rect", {
-            x: x(bin.lower),
-            y: top,
-            width: x(bin.upper) - x(bin.lower),
-            height: plotHeight,
-            fill: "transparent",
-            class: "hit",
-            tabindex: 0,
-            role: "button",
-            "aria-label":
-                bin.lower + " to " + bin.upper + " kg, " +
-                bin.count + " records",
-            "aria-describedby": "tip"
-        });
-
-        hit.addEventListener("click", function(event) {
-            event.stopPropagation();
-            pinned = true;
-            selector.value = String(index);
-            show(index, hit);
-        });
-
-        hit.addEventListener("pointerenter", function(event) {
-            if (event.pointerType === "mouse" && !pinned) show(index, hit);
-        });
-
-        hit.addEventListener("pointerleave", function(event) {
-            if (event.pointerType === "mouse" && !pinned) hide();
-        });
-
-        hit.addEventListener("focus", function() {
-            if (!pinned) show(index, hit);
-        });
-
-        hit.addEventListener("blur", function() {
-            if (!pinned) hide();
-        });
-
-        hit.addEventListener("keydown", function(event) {
-            if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                pinned = true;
-                selector.value = String(index);
-                show(index, hit);
-            }
-        });
-    });
-}
-
-const legend = document.getElementById("legend");
-data.references.forEach(function(reference) {
-    const item = document.createElement("span");
-    item.style.color = colors[reference.label] || "#ffffff";
-    item.textContent =
-        reference.label + ": " + reference.weight.toFixed(1) + " kg";
-    legend.appendChild(item);
-});
-
-document.addEventListener("click", function(event) {
-    if (
-        !event.target.closest(".hit") &&
-        !event.target.closest("#range")
-    ) hide();
-});
-
-document.addEventListener("keydown", function(event) {
-    if (event.key === "Escape") hide();
-});
-
-let resizeTimer;
-window.addEventListener("resize", function() {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(draw, 100);
-});
-
-draw();
-</script>
-</body>
-</html>
-"""
-
-    components.html(
-        template.replace("__DATA__", payload),
-        height=440,
-        scrolling=False,
-    )
 
 def render_review_weight_standard_distribution(owner_id, first_filtered_checklists, second_filtered_checklists=None, second_filter_enabled=False):
     show_chart = st.checkbox('Show top-three horse-weight distribution and standard deviation', value=False, key=f'review_weight_standard_distribution_visible_{owner_id}')
@@ -5021,7 +3957,7 @@ def render_review_weight_standard_distribution(owner_id, first_filtered_checklis
     padding = 0.0
     x_scale = {'domain': [domain_minimum - padding, domain_maximum + padding], 'nice': False}
     spec = {'height': 240, 'background': '#111827', 'padding': {'left': 10, 'top': 10, 'right': 10, 'bottom': 10}, 'layer': [{'mark': {'type': 'bar', 'color': '#60A5FA', 'opacity': 0.85}, 'encoding': {'x': {'field': 'from_weight', 'type': 'quantitative', 'bin': 'binned', 'scale': x_scale, 'axis': {'title': 'Horse weight (kg)', 'tickCount': 4, 'format': '.0f'}}, 'x2': {'field': 'to_weight'}, 'y': {'field': 'count', 'type': 'quantitative', 'axis': {'title': 'Record count', 'tickCount': 4, 'tickMinStep': 1, 'format': ',.0f'}}, 'tooltip': [{'field': 'from_weight', 'type': 'quantitative', 'title': 'From (kg)', 'format': '.1f'}, {'field': 'to_weight', 'type': 'quantitative', 'title': 'To (kg)', 'format': '.1f'}, {'field': 'count', 'type': 'quantitative', 'title': 'Records', 'format': ',.0f'}]}}, {'data': {'values': reference_lines}, 'mark': {'type': 'rule', 'strokeWidth': 2}, 'encoding': {'x': {'field': 'weight', 'type': 'quantitative', 'scale': x_scale}, 'color': {'field': 'reference', 'type': 'nominal', 'scale': {'domain': ['Mean', 'Mean - 1 SD', 'Mean + 1 SD'], 'range': ['#FBBF24', '#F472B6', '#34D399']}, 'legend': {'title': None, 'orient': 'bottom', 'direction': 'horizontal', 'columns': 1, 'labelColor': '#F8FAFC'}}, 'tooltip': [{'field': 'reference', 'type': 'nominal', 'title': 'Reference'}, {'field': 'weight', 'type': 'quantitative', 'title': 'Weight (kg)', 'format': '.1f'}]}}], 'config': {'view': {'stroke': None}, 'axis': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'domainColor': '#64748B', 'tickColor': '#64748B', 'gridColor': '#334155', 'labelFontSize': 11, 'titleFontSize': 12}, 'legend': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'labelFontSize': 11}}}
-    _render_touch_weight_histogram(pd.DataFrame(bins), spec=spec, use_container_width=True)
+    _render_touch_weight_histogram(pd.DataFrame(bins), spec=spec, width='stretch')
     if standard_deviation is not None:
         st.caption(f'Mean ± 1 sample SD: {mean_weight - standard_deviation:,.1f} to {mean_weight + standard_deviation:,.1f} kg. Each checklist is one observation, so a horse can appear more than once. The chart does not assume a normal distribution.')
 
@@ -5031,8 +3967,10 @@ def render_review_weight_standard_distribution(owner_id, first_filtered_checklis
 
 
 
+
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
+    _restore_review_update_filter_state(owner_id)
     initialize_filter_defaults(owner_id)
     initialize_second_filter_defaults(owner_id)
     st.header('Checklist Review')
@@ -5068,13 +4006,13 @@ def render_checklist_review_page():
         st.caption('Download a JSON backup before deployment. After a deployment or local storage reset, upload the same JSON file to restore your saved filters.')
         backup_col1, backup_col2 = st.columns(2)
         with backup_col1:
-            st.download_button(label='📥 Export Saved Filters Backup', data=build_saved_filters_backup_bytes(owner_id), file_name='horse_checklist_saved_filters_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.json', mime='application/json', use_container_width=True)
+            st.download_button(label='📥 Export Saved Filters Backup', data=build_saved_filters_backup_bytes(owner_id), file_name='horse_checklist_saved_filters_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.json', mime='application/json', width='stretch')
         with backup_col2:
             st.caption(f'{len(saved_filters)} saved filter(s) will be included in the backup.')
         st.markdown('---')
         st.write('Restore Saved Filters')
         uploaded_filter_backup = st.file_uploader('Upload saved filters backup JSON', type=['json'], key=saved_filter_key(owner_id, 'backup_import_file'))
-        if st.button('Import Saved Filters Backup', key=saved_filter_key(owner_id, 'backup_import_button'), use_container_width=True):
+        if st.button('Import Saved Filters Backup', key=saved_filter_key(owner_id, 'backup_import_button'), width='stretch'):
             if uploaded_filter_backup is None:
                 st.error('Please select a JSON backup file first.')
             else:
@@ -5094,7 +4032,7 @@ def render_checklist_review_page():
             with saved_filter_col2:
                 st.write('')
                 st.write('')
-                if st.button('Load Saved Filter', key=saved_filter_key(owner_id, 'load_button'), use_container_width=True):
+                if st.button('Load Saved Filter', key=saved_filter_key(owner_id, 'load_button'), width='stretch'):
                     selected_saved_filter = saved_filter_lookup[selected_saved_filter_id]
                     apply_saved_filter_to_session(owner_id, selected_saved_filter['filter_data'], selected_saved_filter['title'])
                     st.session_state.pop('selected_review_checklist_id', None)
@@ -5103,7 +4041,7 @@ def render_checklist_review_page():
             with delete_filter_col1:
                 st.caption('Load a filter, then change any conditions in Search and Filter Checklists.')
             with delete_filter_col2:
-                if st.button('Delete Saved Filter', key=saved_filter_key(owner_id, 'delete_button'), type='secondary', use_container_width=True):
+                if st.button('Delete Saved Filter', key=saved_filter_key(owner_id, 'delete_button'), type='secondary', width='stretch'):
                     success, message = delete_saved_filter(selected_saved_filter_id, owner_id)
                     if success:
                         st.success(message)
@@ -5121,7 +4059,7 @@ def render_checklist_review_page():
             else:
                 st.caption('Set filter conditions below. Changes are applied immediately.')
         with reset_col2:
-            if st.button('Clear All Filters', key=saved_filter_key(owner_id, 'reset_button'), type='secondary', use_container_width=True):
+            if st.button('Clear All Filters', key=saved_filter_key(owner_id, 'reset_button'), type='secondary', width='stretch'):
                 reset_filter_values(owner_id)
                 reset_second_filter_values(owner_id)
                 st.session_state[filter_load_version_key(owner_id)] += 1
@@ -5183,7 +4121,7 @@ def render_checklist_review_page():
         with filter_save_col2:
             st.write('')
             st.write('')
-            if st.button('Save Current Filter', key=saved_filter_key(owner_id, 'save_button'), use_container_width=True):
+            if st.button('Save Current Filter', key=saved_filter_key(owner_id, 'save_button'), width='stretch'):
                 success, message = save_filter(owner_id, saved_filter_title, collect_current_filter_data(owner_id))
                 if success:
                     st.session_state[saved_filter_key(owner_id, 'save_message')] = message
@@ -5283,7 +4221,7 @@ def render_checklist_review_page():
         last_item_number = min(current_page * page_size, total_results)
         st.caption(f'Showing {first_item_number}-{last_item_number} of {total_results} filtered checklist(s). Summary metrics above are calculated from all filtered results.')
         summary_df = build_summary_dataframe(paginated_checklists)
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+        st.dataframe(summary_df, width='stretch', hide_index=True)
         checklist_lookup = {entry['id']: entry for entry in paginated_checklists}
         if checklist_lookup:
             selected_review_checklist_id = st.selectbox('Select checklist on this page to edit', list(checklist_lookup.keys()), format_func=lambda checklist_id: f"#{checklist_id} | {checklist_lookup[checklist_id].get('date_of_race') or ''} | {checklist_lookup[checklist_id].get('horse_name') or ''} | {checklist_lookup[checklist_id].get('horse_owner_name') or ''} | {checklist_lookup[checklist_id].get('venue_name') or ''}", key='selected_review_checklist_id')
@@ -5293,6 +4231,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
@@ -5621,6 +4560,7 @@ def render_login_page():
                 st.session_state.logged_in = True
                 st.session_state.display_name = display_name
                 st.session_state.user_id = user_id
+                st.session_state['app_navigation_page'] = 'Checklist Review'
                 _persistent_login_issue(user_id)
                 st.rerun()
             else:
@@ -5650,10 +4590,15 @@ def render_login_page():
 
 
 
+
+# REVIEW_FIRST_REMOVE_LIGHTWEIGHT_MODE_V1
 def main():
-    render_older_device_settings()
+    _review_was_logged_in = bool(st.session_state.get('logged_in', False))
+    st.session_state.setdefault('app_navigation_page', 'Checklist Review')
     init_db()
     _persistent_login_bootstrap()
+    if not _review_was_logged_in and st.session_state.get('logged_in', False):
+        st.session_state['app_navigation_page'] = 'Checklist Review'
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
     if not st.session_state.logged_in:
@@ -5661,7 +4606,7 @@ def main():
         return
     st.sidebar.title('Horse Checklist App')
     st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
-    page = st.sidebar.radio('Menu', ['Race Checklist', 'Checklist Review', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria'], key='app_navigation_page')
+    page = st.sidebar.radio('Menu', ['Checklist Review', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria'], key='app_navigation_page')
     if st.sidebar.button('Logout'):
         _persistent_login_logout()
         st.rerun()
@@ -5689,6 +4634,7 @@ def main():
         render_template_page('race_name', 'Race Names', 'Race Name')
     elif page == 'Criteria':
         render_template_page('criteria', 'Criteria', 'Criteria Name')
+
 
 
 
