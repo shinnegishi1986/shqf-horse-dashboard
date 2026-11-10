@@ -20,6 +20,77 @@ st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session
 # -------------------------------------------------
 # Database
 # -------------------------------------------------
+# OLDER_DEVICE_LIGHTWEIGHT_RENDERING_V1
+def _older_device_lightweight_enabled():
+    return bool(
+        st.session_state.get(
+            "older_device_lightweight_mode",
+            True,
+        )
+    )
+
+
+def render_older_device_settings():
+    st.sidebar.checkbox(
+        "Lightweight mode",
+        value=True,
+        key="older_device_lightweight_mode",
+        help=(
+            "Use text summaries instead of interactive charts. "
+            "Turn off on devices where charts work reliably."
+        ),
+    )
+
+
+def _older_device_render_stacked_summary(
+    title,
+    rows,
+    total,
+    category_count,
+):
+    st.markdown(f"### {title}")
+
+    if not rows or total <= 0:
+        st.info("No matching records.")
+        return
+
+    st.caption(
+        f"{total:,} records across {category_count:,} categories"
+    )
+
+    # Rows are already aggregated and ordered by the existing chart helper.
+    # Use text rather than iframe, Vega, or dataframe rendering.
+    for row in rows[:21]:
+        category = str(row.get("category", "Unknown"))
+        count = row.get("count", 0)
+
+        try:
+            numeric_count = float(count)
+            percentage = numeric_count / total * 100
+            count_text = f"{numeric_count:,.0f}"
+            share_text = f"{percentage:.1f}%"
+        except (TypeError, ValueError, ZeroDivisionError):
+            count_text = str(count)
+            share_text = "N/A"
+
+        st.text(f"{category}: {count_text} ({share_text})")
+
+
+def _older_device_vega_lite_chart(data, *args, **kwargs):
+    if not _older_device_lightweight_enabled():
+        return st.vega_lite_chart(data, *args, **kwargs)
+    st.caption('Weight histogram — lightweight view')
+    if not isinstance(data, pd.DataFrame):
+        st.info('Interactive chart hidden in lightweight mode.')
+        return
+    required_columns = {'from_weight', 'to_weight', 'count'}
+    if not required_columns.issubset(data.columns):
+        st.info('Interactive chart hidden in lightweight mode.')
+        return
+    for lower, upper, count in data[['from_weight', 'to_weight', 'count']].head(60).itertuples(index=False, name=None):
+        st.text(f'{float(lower):,.1f}–{float(upper):,.1f} kg: {int(count):,} records')
+
+
 def get_db_connection():
     os.makedirs("data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -4148,6 +4219,16 @@ def _review_count_chart_rows(counts, labels, total, top_limit=20):
 # APPLE_TOUCH_STACKED_CHART_TOOLTIP_V1
 # STACKED_BAR_CHART_TEXT_CONTRAST_V1
 def _render_review_stacked_count_chart(title, rows, total, category_count):
+
+    if _older_device_lightweight_enabled():
+        _older_device_render_stacked_summary(
+            title,
+            rows,
+            total,
+            category_count,
+        )
+        return
+
     import json
     import math
     import streamlit.components.v1 as components
@@ -5065,6 +5146,92 @@ def render_review_filter_history(owner_id):
 
 
 
+
+# OPTIONAL_WEIGHT_STANDARD_DISTRIBUTION_V1
+# WEIGHT_CHART_RANGE_350_TO_650_V1
+# WEIGHT_CHART_TOP_THREE_CONDITION_V1
+# WEIGHT_CHART_FIXED_FIVE_KG_BINS_V1
+def render_review_weight_standard_distribution(owner_id, first_filtered_checklists, second_filtered_checklists=None, second_filter_enabled=False):
+    show_chart = st.checkbox('Show top-three horse-weight distribution and standard deviation', value=False, key=f'review_weight_standard_distribution_visible_{owner_id}')
+    if not show_chart:
+        return
+    import math
+    import statistics
+    use_second = False
+    if second_filter_enabled:
+        use_second = st.checkbox('Use second-filter results for the top-three weight chart', value=False, key=f'review_weight_standard_distribution_second_{owner_id}')
+    if use_second:
+        records = second_filtered_checklists if second_filtered_checklists is not None else []
+        scope = 'Second Filter'
+    else:
+        records = first_filtered_checklists
+        scope = 'First Filter'
+    weights = []
+    excluded = 0
+    non_top_three = 0
+    for entry in records:
+        finished_place = clean_text(entry.get('finished_place'))
+        if not finished_place.isdecimal() or int(finished_place) not in (1, 2, 3):
+            non_top_three += 1
+            continue
+        value = entry.get('horse_weight')
+        if value is None or isinstance(value, bool):
+            excluded += 1
+            continue
+        try:
+            weight = float(value)
+        except (TypeError, ValueError, OverflowError):
+            excluded += 1
+            continue
+        if not math.isfinite(weight) or not 350.0 <= weight <= 650.0:
+            excluded += 1
+            continue
+        weights.append(weight)
+    st.markdown('### Horse-Weight Distribution — Top 3')
+    count = len(weights)
+    st.caption(f'{scope} · {count:,} valid top-three weight record(s) · {non_top_three:,} record(s) outside finishing positions 1, 2, or 3 excluded · {excluded:,} top-three weight(s) excluded because they are missing, invalid, or outside 350–650 kg inclusive. Uses all matching checklist records before pagination.')
+    if not weights:
+        st.info('No first-, second-, or third-place finishers with horse weights between 350 and 650 kg inclusive are available for these filters.')
+        return
+    mean_weight = statistics.mean(weights)
+    standard_deviation = statistics.stdev(weights) if count >= 2 else None
+    first_column, second_column = st.columns(2)
+    first_column.metric('Mean Horse Weight (Top 3)', f'{mean_weight:,.1f} kg')
+    second_column.metric('Standard Deviation (Top 3)', f'{standard_deviation:,.1f} kg' if standard_deviation is not None else 'N/A')
+    minimum = min(weights)
+    maximum = max(weights)
+    minimum_column, maximum_column = st.columns(2)
+    minimum_column.metric('Minimum Weight (Top 3)', f'{minimum:,.1f} kg')
+    maximum_column.metric('Maximum Weight (Top 3)', f'{maximum:,.1f} kg')
+    if standard_deviation is None:
+        st.caption('At least two valid weight records are required to calculate sample standard deviation.')
+    bin_count = 60
+    lower_bound = 350.0
+    upper_bound = 650.0
+    bin_width = 5.0
+    bin_counts = [0] * bin_count
+    for weight in weights:
+        index = int((weight - lower_bound) / bin_width)
+        index = max(0, min(bin_count - 1, index))
+        bin_counts[index] += 1
+    bins = [{'from_weight': lower_bound + index * bin_width, 'to_weight': upper_bound if index == bin_count - 1 else lower_bound + (index + 1) * bin_width, 'count': bin_counts[index]} for index in range(bin_count)]
+    reference_lines = [{'weight': mean_weight, 'reference': 'Mean'}]
+    if standard_deviation is not None and standard_deviation > 0:
+        reference_lines.extend([{'weight': mean_weight - standard_deviation, 'reference': 'Mean - 1 SD'}, {'weight': mean_weight + standard_deviation, 'reference': 'Mean + 1 SD'}])
+    domain_minimum = 350.0
+    domain_maximum = 650.0
+    padding = 0.0
+    x_scale = {'domain': [domain_minimum - padding, domain_maximum + padding], 'nice': False}
+    spec = {'height': 240, 'background': '#111827', 'padding': {'left': 10, 'top': 10, 'right': 10, 'bottom': 10}, 'layer': [{'mark': {'type': 'bar', 'color': '#60A5FA', 'opacity': 0.85}, 'encoding': {'x': {'field': 'from_weight', 'type': 'quantitative', 'bin': 'binned', 'scale': x_scale, 'axis': {'title': 'Horse weight (kg)', 'tickCount': 4, 'format': '.0f'}}, 'x2': {'field': 'to_weight'}, 'y': {'field': 'count', 'type': 'quantitative', 'axis': {'title': 'Record count', 'tickCount': 4, 'tickMinStep': 1, 'format': ',.0f'}}, 'tooltip': [{'field': 'from_weight', 'type': 'quantitative', 'title': 'From (kg)', 'format': '.1f'}, {'field': 'to_weight', 'type': 'quantitative', 'title': 'To (kg)', 'format': '.1f'}, {'field': 'count', 'type': 'quantitative', 'title': 'Records', 'format': ',.0f'}]}}, {'data': {'values': reference_lines}, 'mark': {'type': 'rule', 'strokeWidth': 2}, 'encoding': {'x': {'field': 'weight', 'type': 'quantitative', 'scale': x_scale}, 'color': {'field': 'reference', 'type': 'nominal', 'scale': {'domain': ['Mean', 'Mean - 1 SD', 'Mean + 1 SD'], 'range': ['#FBBF24', '#F472B6', '#34D399']}, 'legend': {'title': None, 'orient': 'bottom', 'direction': 'horizontal', 'columns': 1, 'labelColor': '#F8FAFC'}}, 'tooltip': [{'field': 'reference', 'type': 'nominal', 'title': 'Reference'}, {'field': 'weight', 'type': 'quantitative', 'title': 'Weight (kg)', 'format': '.1f'}]}}], 'config': {'view': {'stroke': None}, 'axis': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'domainColor': '#64748B', 'tickColor': '#64748B', 'gridColor': '#334155', 'labelFontSize': 11, 'titleFontSize': 12}, 'legend': {'labelColor': '#F8FAFC', 'titleColor': '#F8FAFC', 'labelFontSize': 11}}}
+    _older_device_vega_lite_chart(pd.DataFrame(bins), spec=spec, use_container_width=True)
+    if standard_deviation is not None:
+        st.caption(f'Mean ± 1 sample SD: {mean_weight - standard_deviation:,.1f} to {mean_weight + standard_deviation:,.1f} kg. Each checklist is one observation, so a horse can appear more than once. The chart does not assume a normal distribution.')
+
+
+
+
+
+
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
 
@@ -5802,6 +5969,14 @@ def render_checklist_review_page():
 
     render_review_filter_history(owner_id)
 
+
+    render_review_weight_standard_distribution(
+        owner_id=owner_id,
+        first_filtered_checklists=first_filtered_checklists,
+        second_filtered_checklists=second_filtered_checklists,
+        second_filter_enabled=second_filter_enabled,
+    )
+
     review_metrics = calculate_review_metrics(first_filtered_checklists)
 
     st.subheader("Review Summary")
@@ -6206,6 +6381,8 @@ def render_login_page():
 
 
 def main():
+    render_older_device_settings()
+
     init_db()
 
     if "logged_in" not in st.session_state:
@@ -6262,3 +6439,6 @@ if __name__ == "__main__":
     main()
 
 # Optional weight-change filtering enabled.
+
+
+# WEIGHT_CHART_EXPLICIT_PADDING_FIX_V1
