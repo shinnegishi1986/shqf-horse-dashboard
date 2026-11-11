@@ -3091,32 +3091,51 @@ def _capture_review_update_filter_state(owner_id):
     }
 
 
+# REVIEW_PROTECTED_WIDGET_STATE_FIX_V1
+def _review_is_protected_filter_widget(key, owner_id):
+    if not isinstance(key, str):
+        return False
+
+    # Explicitly covers the uploader identified in the reported error.
+    protected_keys = {
+        f"saved_filter_{owner_id}_backup_import_file",
+        f"second_filter_{owner_id}_backup_import_file",
+    }
+
+    protected_keys.update([
+        'batch_checklist_file',
+        'import_uploaded_file_button',
+        f'review_filter_history_clear_{owner_id}',
+        f'review_filter_history_next_{owner_id}',
+        f'review_filter_history_previous_{owner_id}',
+        saved_filter_key(owner_id, 'backup_import_button'),
+        saved_filter_key(owner_id, 'backup_import_file'),
+        saved_filter_key(owner_id, 'delete_button'),
+        saved_filter_key(owner_id, 'load_button'),
+        saved_filter_key(owner_id, 'reset_button'),
+        saved_filter_key(owner_id, 'save_button'),
+        second_filter_key(owner_id, 'reset_button')
+    ])
+
+    return key in protected_keys
+
 def _queue_review_update_filter_restore(owner_id, snapshot):
     from copy import deepcopy
+    if not _review_is_protected_filter_widget(_review_filter_restore_key(owner_id), owner_id):
+        st.session_state[_review_filter_restore_key(owner_id)] = deepcopy(snapshot)
 
-    st.session_state[_review_filter_restore_key(owner_id)] = deepcopy(
-        snapshot
-    )
 
 
 def _restore_review_update_filter_state(owner_id):
-    snapshot = st.session_state.pop(
-        _review_filter_restore_key(owner_id),
-        None,
-    )
-
+    snapshot = st.session_state.pop(_review_filter_restore_key(owner_id), None)
     if not isinstance(snapshot, dict):
         return
-
-    prefixes = (
-        f"saved_filter_{owner_id}_",
-        f"second_filter_{owner_id}_",
-    )
-
-    # This runs before Checklist Review creates its widgets.
+    prefixes = (f'saved_filter_{owner_id}_', f'second_filter_{owner_id}_')
     for key, value in snapshot.items():
         if isinstance(key, str) and key.startswith(prefixes):
-            st.session_state[key] = value
+            if not _review_is_protected_filter_widget(key, owner_id):
+                st.session_state[key] = value
+
 
 
 def _review_editor_weight_value(
@@ -3680,55 +3699,31 @@ def _record_review_filter_history(owner_id):
 
 def _restore_review_filter_configuration(owner_id, configuration):
     from copy import deepcopy
-
     defaults = get_filter_defaults()
-
-    # This function runs in a button callback, before the next script run
-    # instantiates filter widgets.
     reset_filter_values(owner_id)
     reset_second_filter_values(owner_id)
-
     for name in _filter_history_fields():
-        st.session_state[saved_filter_key(owner_id, name)] = deepcopy(
-            configuration["first"].get(name, defaults[name])
-        )
-
-        st.session_state[second_filter_key(owner_id, name)] = deepcopy(
-            configuration["second"].get(name, defaults[name])
-        )
-
-    st.session_state[
-        saved_filter_key(owner_id, "active_filter_title")
-    ] = configuration.get("active_filter_title", "")
-
-    st.session_state[
-        second_filter_key(owner_id, "enabled")
-    ] = bool(configuration.get("second_enabled", False))
-
-    # Existing selectbox helpers use load versions to refresh their
-    # separate widget keys from the restored filter-state values.
+        if not _review_is_protected_filter_widget(saved_filter_key(owner_id, name), owner_id):
+            st.session_state[saved_filter_key(owner_id, name)] = deepcopy(configuration['first'].get(name, defaults[name]))
+        if not _review_is_protected_filter_widget(second_filter_key(owner_id, name), owner_id):
+            st.session_state[second_filter_key(owner_id, name)] = deepcopy(configuration['second'].get(name, defaults[name]))
+    if not _review_is_protected_filter_widget(saved_filter_key(owner_id, 'active_filter_title'), owner_id):
+        st.session_state[saved_filter_key(owner_id, 'active_filter_title')] = configuration.get('active_filter_title', '')
+    if not _review_is_protected_filter_widget(second_filter_key(owner_id, 'enabled'), owner_id):
+        st.session_state[second_filter_key(owner_id, 'enabled')] = bool(configuration.get('second_enabled', False))
     first_version_key = filter_load_version_key(owner_id)
     second_version_key = second_filter_load_version_key(owner_id)
-
-    st.session_state[first_version_key] = (
-        int(st.session_state.get(first_version_key, 0)) + 1
-    )
-
-    st.session_state[second_version_key] = (
-        int(st.session_state.get(second_version_key, 0)) + 1
-    )
-
-    # Restart pagination because the restored result set may be smaller.
+    if not _review_is_protected_filter_widget(first_version_key, owner_id):
+        st.session_state[first_version_key] = int(st.session_state.get(first_version_key, 0)) + 1
+    if not _review_is_protected_filter_widget(second_version_key, owner_id):
+        st.session_state[second_version_key] = int(st.session_state.get(second_version_key, 0)) + 1
     for key_function in (saved_filter_key, second_filter_key):
-        st.session_state[key_function(owner_id, "page_number")] = 1
+        if not _review_is_protected_filter_widget(key_function(owner_id, 'page_number'), owner_id):
+            st.session_state[key_function(owner_id, 'page_number')] = 1
+    if not _review_is_protected_filter_widget(saved_filter_key(owner_id, 'page_number_input'), owner_id):
+        st.session_state[saved_filter_key(owner_id, 'page_number_input')] = 1
+    st.session_state.pop('selected_review_checklist_id', None)
 
-    # This is the page-number widget key used by Checklist Review.
-    st.session_state[
-        saved_filter_key(owner_id, "page_number_input")
-    ] = 1
-
-    # Avoid carrying an editor selection into a different result set.
-    st.session_state.pop("selected_review_checklist_id", None)
 
 
 def _navigate_review_filter_history(owner_id, direction):
