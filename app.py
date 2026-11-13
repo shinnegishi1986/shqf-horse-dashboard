@@ -2832,6 +2832,210 @@ def render_batch_import_section(owner_id, criteria_items):
 # -------------------------------------------------
 # Filter functions
 # -------------------------------------------------
+# CURRENT_REVIEW_FILTER_DIAGNOSTICS_V1
+def _current_review_filter_safe_value(value):
+    import datetime
+    import math
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+
+        if isinstance(value, (set, frozenset)):
+            items.sort(key=str)
+
+        return [
+            _current_review_filter_safe_value(item)
+            for item in items
+        ]
+
+    if isinstance(value, dict):
+        return {
+            str(key): _current_review_filter_safe_value(item)
+            for key, item in value.items()
+        }
+
+    return str(value)
+
+
+def _current_review_filter_length(value):
+    try:
+        return len(value)
+    except (TypeError, AttributeError):
+        return None
+
+
+def _current_review_filter_is_record_argument(name, value):
+    normalized = name.lower()
+
+    if normalized in {
+        "checklists",
+        "records",
+        "entries",
+        "rows",
+        "data",
+        "filtered_checklists",
+        "first_filtered_checklists",
+        "second_filtered_checklists",
+    }:
+        return True
+
+    if "checklists" in normalized:
+        return True
+
+    if isinstance(value, (list, tuple)) and value:
+        first = value[0]
+
+        if isinstance(first, dict):
+            return bool(
+                {
+                    "horse_id",
+                    "horse_name",
+                    "horse_weight",
+                    "race_date",
+                }.intersection(first)
+            )
+
+    return False
+
+
+def _current_review_filter_trace(function):
+    import functools
+    import inspect
+
+    signature = inspect.signature(function)
+
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        captures = st.session_state.get(
+            "_current_review_filter_capture_stack",
+            [],
+        )
+
+        if not captures:
+            return function(*args, **kwargs)
+
+        # Capture only actual function arguments, not an unrelated snapshot
+        # of all Session State keys.
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+
+        supplied = {}
+        source_counts = {}
+
+        for name, value in bound.arguments.items():
+            if _current_review_filter_is_record_argument(name, value):
+                source_counts[name] = _current_review_filter_length(value)
+                continue
+
+            # User identity is not a filtering control to display here.
+            if name in {"owner_id", "user_id"}:
+                continue
+
+            supplied[name] = _current_review_filter_safe_value(value)
+
+        result = function(*args, **kwargs)
+
+        captures[-1].append({
+            "arguments": supplied,
+            "source_counts": source_counts,
+            "result_count": _current_review_filter_length(result),
+        })
+
+        return result
+
+    return wrapped
+
+
+def _current_review_filter_render(calls):
+    import json
+    with st.expander('Current Review Filters', expanded=False):
+        st.caption('These are the actual arguments received by the checklist filtering function during this page render. Restored and default values are included.')
+        if not calls:
+            st.info('The filtering function has not run during this render. No current filter results were captured.')
+            return
+        for index, call in enumerate(calls, start=1):
+            st.markdown(f'#### Filtering pass {index}')
+            counts = call['source_counts']
+            output_count = call['result_count']
+            if counts:
+                sources = '; '.join((f'{name}: ' + (f'{count:,}' if count is not None else 'count unavailable') for name, count in counts.items()))
+                output_text = f'{output_count:,}' if output_count is not None else 'count unavailable'
+                st.write(f'Input records — {sources}. Output records — {output_text}.')
+                if len(counts) == 1:
+                    input_count = next(iter(counts.values()))
+                    if input_count is not None and output_count is not None and (output_count < input_count):
+                        st.warning('This filtering pass reduced the number of records. Its supplied values are shown below.')
+                    elif input_count is not None and output_count == input_count:
+                        st.caption('This pass did not reduce the record count. Conditions may still be enabled.')
+            else:
+                st.write('Output records: ' + (f'{output_count:,}' if output_count is not None else 'count unavailable'))
+            arguments = call['arguments']
+            rows = [{'Filter argument': name, 'Value received': json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)} for name, value in arguments.items()]
+            if rows:
+                st.table(rows)
+            else:
+                st.info('No separate filter arguments were supplied.')
+        st.caption('Read enable/apply switches together with their associated values. A stored range is not necessarily applied when its switch is false. Null values, empty lists, and default bounds are shown rather than guessed to be active or inactive.')
+        st.caption('These counts describe calls to filter_checklists, not the number of rows visible on the current pagination page. The input may already be restricted by database loading or earlier application logic.')
+
+
+
+# CURRENT_FILTER_VISIBILITY_BELOW_HEADER_V1
+def _current_review_filter_place_panel():
+    stack = st.session_state.get(
+        "_current_review_filter_capture_stack",
+        [],
+    )
+
+    if stack:
+        stack[-1].panel = st.container()
+
+
+def _current_review_filter_page(function):
+    import functools
+
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        class ReviewFilterCalls(list):
+            pass
+
+        calls = ReviewFilterCalls()
+        calls.panel = None
+
+        state_key = "_current_review_filter_capture_stack"
+        stack = st.session_state.get(state_key)
+
+        if stack is None:
+            stack = []
+            st.session_state[state_key] = stack
+
+        stack.append(calls)
+
+        try:
+            return function(*args, **kwargs)
+        finally:
+            if stack and stack[-1] is calls:
+                stack.pop()
+
+            # The original review function reserves this container directly
+            # after its header. Do not create a fallback above the header.
+            if calls.panel is not None:
+                with calls.panel:
+                    _current_review_filter_render(calls)
+
+    return wrapped
+
+
+@_current_review_filter_trace
 def filter_checklists(checklists, selected_filters, selected_venue_ids, criteria_filters, criteria_mode, distance_from, distance_to, previous_distance_from, previous_distance_to, interval_days_from, interval_days_to, weight_change_from, weight_change_to, date_from, date_to, memo_keyword, program_number, number_of_horses, finished_places, exclude_finished_places, odds_from, odds_to, prize_from, prize_to, enable_bracket_filter, bracket_from, bracket_to, enable_horse_filter, horse_from, horse_to, enable_weight_filter, weight_from, weight_to, enable_weight_change_filter=False, enable_distance_filter=False, enable_previous_distance_filter=False, enable_interval_days_filter=False):
     filtered = []
     for entry in checklists:
@@ -3786,57 +3990,22 @@ def _clear_review_filter_history(owner_id):
     }
 
 
+# REVIEW_FILTER_BUTTON_ALIGNMENT_V1
 def render_review_filter_history(owner_id):
     _record_review_filter_history(owner_id)
-
     history = st.session_state[_filter_history_session_key(owner_id)]
-    entries = history["entries"]
-    position = history["position"]
-
-    st.markdown("### Filter History")
-
+    entries = history['entries']
+    position = history['position']
+    pass
     previous_column, next_column, clear_column = st.columns(3)
-
     with previous_column:
-        st.button(
-            "Last Filter",
-            key=f"review_filter_history_previous_{owner_id}",
-            type="secondary",
-            disabled=position <= 0,
-            on_click=_navigate_review_filter_history,
-            args=(owner_id, -1),
-            width='stretch',
-        )
-
+        st.button('Last Filter', key=f'review_filter_history_previous_{owner_id}', type='secondary', disabled=position <= 0, on_click=_navigate_review_filter_history, args=(owner_id, -1), width='stretch')
     with next_column:
-        st.button(
-            "Next Filter",
-            key=f"review_filter_history_next_{owner_id}",
-            type="secondary",
-            disabled=position >= len(entries) - 1,
-            on_click=_navigate_review_filter_history,
-            args=(owner_id, 1),
-            width='stretch',
-        )
-
+        st.button('Next Filter', key=f'review_filter_history_next_{owner_id}', type='secondary', disabled=position >= len(entries) - 1, on_click=_navigate_review_filter_history, args=(owner_id, 1), width='stretch')
     with clear_column:
-        st.button(
-            "Clear History",
-            key=f"review_filter_history_clear_{owner_id}",
-            type="primary",
-            disabled=len(entries) <= 1,
-            on_click=_clear_review_filter_history,
-            args=(owner_id,),
-            help=(
-                "Remove previous and forward history while keeping "
-                "the currently applied filters."
-            ),
-            width='stretch',
-        )
+        st.button('Clear History', key=f'review_filter_history_clear_{owner_id}', type='primary', disabled=len(entries) <= 1, on_click=_clear_review_filter_history, args=(owner_id,), help='Remove previous and forward history while keeping the currently applied filters.', width='stretch')
+    st.caption(f'Configuration {position + 1} of {len(entries)}')
 
-    st.caption(
-        f"Configuration {position + 1} of {len(entries)}"
-    )
 
 
 
@@ -3946,12 +4115,67 @@ def render_review_weight_standard_distribution(owner_id, first_filtered_checklis
 
 
 
+# REVIEW_FILTER_HISTORY_SHARED_ROW_V1
+def _review_filter_control_in_column(column, render_function, *args, **kwargs):
+    with column:
+        return render_function(*args, **kwargs)
+
+# REVIEW_FILTER_ACTIONS_LABELED_GROUP_V1
+# REVIEW_CLEAR_ALL_FILTERS_BLUE_BUTTON_V1
+def _review_style_clear_all_filters_button(widget_key):
+    import re
+
+    key = str(widget_key)
+
+    # Existing filter widget keys use letters, numbers, underscores,
+    # and hyphens. Reject unexpected characters instead of interpolating
+    # arbitrary content into CSS.
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+        return
+
+    selector = f'[class~="st-key-{key}"] button'
+
+    css = """
+<style>
+__SELECTOR__ {
+    background-color: #2563eb !important;
+    border-color: #2563eb !important;
+    color: #ffffff !important;
+}
+__SELECTOR__ p {
+    color: #ffffff !important;
+}
+__SELECTOR__:hover:not(:disabled) {
+    background-color: #1d4ed8 !important;
+    border-color: #1d4ed8 !important;
+    color: #ffffff !important;
+}
+__SELECTOR__:active:not(:disabled) {
+    background-color: #1e40af !important;
+    border-color: #1e40af !important;
+}
+__SELECTOR__:focus-visible {
+    outline: 3px solid #93c5fd !important;
+    outline-offset: 2px;
+    box-shadow: none !important;
+}
+__SELECTOR__:disabled {
+    opacity: 0.5;
+}
+</style>
+""".replace("__SELECTOR__", selector)
+
+    st.markdown(css, unsafe_allow_html=True)
+
+@_current_review_filter_page
 def render_checklist_review_page():
     owner_id = st.session_state.user_id
+    _review_style_clear_all_filters_button(saved_filter_key(owner_id, 'reset_button'))
     _restore_review_update_filter_state(owner_id)
     initialize_filter_defaults(owner_id)
     initialize_second_filter_defaults(owner_id)
     st.header('Checklist Review')
+    _current_review_filter_place_panel()
     checklists = get_user_checklists(owner_id)
     horses = get_user_horses(owner_id)
     horse_owners = get_user_horse_owners(owner_id)
@@ -4028,6 +4252,13 @@ def render_checklist_review_page():
                         st.error(message)
         else:
             st.info('No saved filters yet.')
+    with st.container(border=True):
+        st.markdown('#### Filter Actions')
+        _review_filter_action_columns = st.columns([1, 3])
+        with _review_filter_action_columns[0]:
+            st.markdown('##### Current Filters')
+        with _review_filter_action_columns[1]:
+            st.markdown('##### Filter History')
     with st.expander('🔍 Search and Filter Checklists', expanded=True):
         reset_col1, reset_col2 = st.columns([3, 1])
         with reset_col1:
@@ -4037,7 +4268,7 @@ def render_checklist_review_page():
             else:
                 st.caption('Set filter conditions below. Changes are applied immediately.')
         with reset_col2:
-            if st.button('Clear All Filters', key=saved_filter_key(owner_id, 'reset_button'), type='secondary', width='stretch'):
+            if _review_filter_control_in_column(_review_filter_action_columns[0], st.button, 'Clear All Filters', key=saved_filter_key(owner_id, 'reset_button'), type='secondary', width='stretch'):
                 reset_filter_values(owner_id)
                 reset_second_filter_values(owner_id)
                 st.session_state[filter_load_version_key(owner_id)] += 1
@@ -4123,7 +4354,7 @@ def render_checklist_review_page():
         dominance_col3.metric('Dominance in First Filter', f'{dominance_percentage:.1f}%')
         st.caption(f'The second filter matches {second_filter_total} out of {first_filter_total} first-filter result(s): {dominance_percentage:.1f}%. The results list below still shows all first-filter results.')
     render_review_stacked_count_charts(owner_id=owner_id, first_filtered_checklists=first_filtered_checklists, second_filtered_checklists=second_filtered_checklists, second_filter_enabled=second_filter_enabled)
-    render_review_filter_history(owner_id)
+    _review_filter_control_in_column(_review_filter_action_columns[1], render_review_filter_history, owner_id)
     render_review_weight_standard_distribution(owner_id=owner_id, first_filtered_checklists=first_filtered_checklists, second_filtered_checklists=second_filtered_checklists, second_filter_enabled=second_filter_enabled)
     review_metrics = calculate_review_metrics(first_filtered_checklists)
     st.subheader('Review Summary')
@@ -4209,6 +4440,10 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
+
+
+
 
 
 
