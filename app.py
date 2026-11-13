@@ -29,6 +29,27 @@ st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session
 
 
 
+# REVIEW_PAGE_SIZE_DEFAULT_STATE_FIX_V1
+def _review_page_size_without_duplicate_default(
+    widget_function,
+    *args,
+    **kwargs,
+):
+    key = kwargs.get("key")
+
+    if key is not None and key in st.session_state:
+        # index=None supplies no competing default. Streamlit uses the
+        # existing Session State value associated with this widget key.
+        if len(args) >= 3:
+            positional = list(args)
+            positional[2] = None
+            args = tuple(positional)
+            kwargs.pop("index", None)
+        else:
+            kwargs["index"] = None
+
+    return widget_function(*args, **kwargs)
+
 def get_db_connection():
     os.makedirs("data", exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -4163,7 +4184,7 @@ def render_checklist_review_page():
             saved_page_size = st.session_state.get(saved_filter_key(owner_id, 'page_size'), 50)
             if saved_page_size not in page_size_options:
                 saved_page_size = 50
-            selected_page_size = st.selectbox('Results per page', page_size_options, index=page_size_options.index(saved_page_size), key=saved_filter_key(owner_id, 'page_size_selector'))
+            selected_page_size = _review_page_size_without_duplicate_default(st.selectbox, 'Results per page', page_size_options, index=page_size_options.index(saved_page_size), key=saved_filter_key(owner_id, 'page_size_selector'))
         if selected_page_size == 'Show all':
             page_size = total_results
         else:
