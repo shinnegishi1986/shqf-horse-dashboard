@@ -38,6 +38,852 @@ _RF_UNSET = object()
 
 # RACE_BLOG_EDIT_AND_ENTER_TAGS_V1
 
+# RACE_TEMPLATE_EDIT_DELETE_V1
+
+# RACE_BLOG_VISIBLE_LIST_PAGINATION_V1
+
+def _rbl_move(owner_id, amount, total_pages):
+    key = f"rbl_page_{owner_id}"
+    current = int(st.session_state.get(key, 1) or 1)
+
+    st.session_state[key] = max(
+        1,
+        min(total_pages, current + amount),
+    )
+
+
+def _rbl_navigation(owner_id, page, total_pages, position):
+    left, middle, right = st.columns([1, 2, 1])
+
+    with left:
+        st.button(
+            "Previous",
+            key=f"rbl_previous_{position}_{owner_id}",
+            disabled=page <= 1,
+            on_click=_rbl_move,
+            args=(owner_id, -1, total_pages),
+        )
+
+    with middle:
+        if position == "top":
+            page = int(
+                st.number_input(
+                    "Page",
+                    min_value=1,
+                    max_value=total_pages,
+                    step=1,
+                    value=None,
+                    key=f"rbl_page_{owner_id}",
+                )
+                or 1
+            )
+
+        st.caption(
+            f"Page {page:,} of {total_pages:,}"
+            " · 20 articles per page"
+        )
+
+    with right:
+        st.button(
+            "Next",
+            key=f"rbl_next_{position}_{owner_id}",
+            disabled=page >= total_pages,
+            on_click=_rbl_move,
+            args=(owner_id, 1, total_pages),
+        )
+
+    return page
+
+
+def _rbl_render(owner_id, templates):
+    import json
+
+    st.subheader("Articles")
+
+    query = st.text_input(
+        "Search titles, article text, or tags",
+        key=f"rbl_search_text_{owner_id}",
+    )
+
+    tags = _rb_tag_input(
+        owner_id,
+        "Require tags — all selected tags must match",
+        f"rbl_search_tags_{owner_id}",
+    )
+
+    try:
+        normalized_tags = _rb_tags(tags)
+
+        signature = json.dumps(
+            [
+                query.strip(),
+                sorted(normalized_tags),
+            ],
+            ensure_ascii=False,
+        )
+
+        # The existing search helper returns 20 articles per page.
+        count, rows = _rb_search(
+            owner_id,
+            query,
+            tags,
+            page=1,
+        )
+
+    except ValueError as error:
+        st.error(str(error))
+        return
+
+    page_key = f"rbl_page_{owner_id}"
+    signature_key = f"rbl_signature_{owner_id}"
+
+    # Start from page one when search conditions change.
+    if st.session_state.get(signature_key) != signature:
+        st.session_state[signature_key] = signature
+        st.session_state[page_key] = 1
+
+    total_pages = max(1, (count + 19) // 20)
+
+    page = max(
+        1,
+        min(
+            total_pages,
+            int(st.session_state.get(page_key, 1) or 1),
+        ),
+    )
+
+    # Set state before creating the page-number widget.
+    st.session_state[page_key] = page
+
+    if not count:
+        st.info(
+            "No articles match these search conditions."
+        )
+        return
+
+    page = _rbl_navigation(
+        owner_id,
+        page,
+        total_pages,
+        "top",
+    )
+
+    if page != 1:
+        count, rows = _rb_search(
+            owner_id,
+            query,
+            tags,
+            page=page,
+        )
+
+    if not rows:
+        st.info(
+            "The results changed. Use Previous or change "
+            "the search to refresh the list."
+        )
+        return
+
+    first = (page - 1) * 20 + 1
+    last = first + len(rows) - 1
+
+    st.caption(
+        f"Showing articles {first:,}–{last:,} "
+        f"of {count:,}. Newest first."
+    )
+
+    ids = [row["id"] for row in rows]
+    placeholders = ",".join("?" for _ in ids)
+
+    # Fetch article text only for the current page.
+    posts = {
+        row["id"]: row
+        for row in _rf_rows(
+            "SELECT * FROM rf_blog_posts "
+            "WHERE owner_id=? AND id IN ("
+            + placeholders
+            + ")",
+            [owner_id] + ids,
+        )
+    }
+
+    # Fetch tags for the current page in one query.
+    tag_rows = _rf_rows(
+        "SELECT pt.post_id,t.name "
+        "FROM rf_blog_post_tags pt "
+        "JOIN rf_blog_tags t ON t.id=pt.tag_id "
+        "JOIN rf_blog_posts p ON p.id=pt.post_id "
+        "WHERE p.owner_id=? AND t.owner_id=? "
+        "AND p.id IN ("
+        + placeholders
+        + ") ORDER BY t.normalized",
+        [owner_id, owner_id] + ids,
+    )
+
+    tags_by_post = {}
+
+    for row in tag_rows:
+        tags_by_post.setdefault(
+            row["post_id"],
+            [],
+        ).append(row["name"])
+
+    # Preserve the ordering returned by the search helper.
+    for result in rows:
+        post = posts.get(result["id"])
+
+        if post is None:
+            continue
+
+        post_id = post["id"]
+        prefix = f"rbl_article_{owner_id}_{post_id}"
+
+        with st.container(border=True):
+            st.subheader(post["title"])
+
+            dates = (
+                f"Article #{post_id}"
+                f" | Created: {post['created_at']}"
+            )
+
+            if post.get("updated_at"):
+                dates += (
+                    f" | Updated: {post['updated_at']}"
+                )
+
+            st.caption(dates)
+
+            template = templates.get(
+                post["template_id"]
+            )
+
+            if template:
+                st.caption(_rf_label(template))
+
+            else:
+                st.caption(
+                    "Associated race template is unavailable."
+                )
+
+            article_tags = tags_by_post.get(
+                post_id,
+                [],
+            )
+
+            if article_tags:
+                st.caption(
+                    "Tags: "
+                    + json.dumps(
+                        article_tags,
+                        ensure_ascii=False,
+                    )
+                )
+
+            body = post.get("body") or ""
+
+            if len(body) <= 500:
+                st.markdown(
+                    body,
+                    unsafe_allow_html=False,
+                )
+
+            else:
+                # A plain-text preview avoids broken Markdown
+                # caused by cutting a link or formatting token.
+                st.text(
+                    body[:500].rstrip() + "…"
+                )
+
+                if st.checkbox(
+                    "Read full article",
+                    key=prefix + "_full",
+                ):
+                    st.markdown(
+                        body,
+                        unsafe_allow_html=False,
+                    )
+
+            if st.checkbox(
+                "Show images",
+                key=prefix + "_images",
+            ):
+                images = _rf_rows(
+                    "SELECT filename,image_data "
+                    "FROM rf_blog_images "
+                    "WHERE owner_id=? AND post_id=? "
+                    "ORDER BY id",
+                    (owner_id, post_id),
+                )
+
+                if not images:
+                    st.caption(
+                        "This article has no images."
+                    )
+
+                for image in images:
+                    st.image(
+                        bytes(image["image_data"]),
+                        caption=image["filename"],
+                    )
+
+            if st.checkbox(
+                "Edit this article",
+                key=prefix + "_edit",
+            ):
+                _rb_edit_article(
+                    owner_id,
+                    post,
+                    templates,
+                )
+
+    _rbl_navigation(
+        owner_id,
+        page,
+        total_pages,
+        "bottom",
+    )
+
+def _rt_fields():
+    return (
+        "race_name_id",
+        "race_date",
+        "program_number",
+        "distance",
+        "number_of_horses",
+        "race_class_id",
+        "venue_id",
+    )
+
+
+def _rt_current(conn, owner_id, template_id, expected):
+    found = conn.execute(
+        "SELECT * FROM rf_race_templates "
+        "WHERE owner_id=? AND id=?",
+        (owner_id, template_id),
+    ).fetchone()
+
+    if found is None:
+        raise ValueError("This template is unavailable.")
+
+    current = dict(found)
+
+    if any(
+        current.get(key) != expected.get(key)
+        for key in _rt_fields()
+    ):
+        raise ValueError(
+            "This template changed after the editor was opened. "
+            "Your changes were not saved. "
+            "Reload the stored template first."
+        )
+
+    return current
+
+
+def _rt_update(
+    owner_id,
+    template_id,
+    expected,
+    race_name_id,
+    new_name,
+    race_date,
+    program,
+    distance,
+    horses,
+    class_id,
+    venue_id,
+):
+    if venue_id is None:
+        raise ValueError("Select a venue.")
+
+    if not date(1980, 1, 1) <= race_date <= date(2100, 12, 31):
+        raise ValueError(
+            "Race date must be between 1980 and 2100."
+        )
+
+    if not (
+        1 <= int(program) <= 12
+        and 1 <= int(distance) <= 5000
+        and 1 <= int(horses) <= 18
+    ):
+        raise ValueError(
+            "Program, distance, or number of horses "
+            "is outside the supported range."
+        )
+
+    conn = _rf_db()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        try:
+            _rt_current(
+                conn,
+                owner_id,
+                template_id,
+                expected,
+            )
+
+            if not conn.execute(
+                "SELECT 1 FROM venues "
+                "WHERE owner_id=? AND id=?",
+                (owner_id, venue_id),
+            ).fetchone():
+                raise ValueError(
+                    "The selected venue is unavailable "
+                    "for this account."
+                )
+
+            if class_id is not None and not conn.execute(
+                "SELECT 1 FROM race_classes "
+                "WHERE owner_id=? AND id=?",
+                (owner_id, class_id),
+            ).fetchone():
+                raise ValueError(
+                    "The selected race class is unavailable "
+                    "for this account."
+                )
+
+            if race_name_id is None:
+                name = str(new_name or "").strip()
+
+                if not name or len(name) > 200:
+                    raise ValueError(
+                        "Enter a new race name of 1–200 characters."
+                    )
+
+                existing = conn.execute(
+                    "SELECT id FROM race_names "
+                    "WHERE owner_id=? "
+                    "AND RF_CASEFOLD(race_name)=RF_CASEFOLD(?)",
+                    (owner_id, name),
+                ).fetchone()
+
+                if existing:
+                    race_name_id = existing["id"]
+
+                else:
+                    race_name_id = conn.execute(
+                        "INSERT INTO race_names(owner_id,race_name) "
+                        "VALUES (?,?)",
+                        (owner_id, name),
+                    ).lastrowid
+
+            elif not conn.execute(
+                "SELECT 1 FROM race_names "
+                "WHERE owner_id=? AND id=?",
+                (owner_id, race_name_id),
+            ).fetchone():
+                raise ValueError(
+                    "The selected race name is unavailable "
+                    "for this account."
+                )
+
+            conn.execute("""
+                UPDATE rf_race_templates
+                SET race_name_id=?,
+                    race_date=?,
+                    program_number=?,
+                    distance=?,
+                    number_of_horses=?,
+                    race_class_id=?,
+                    venue_id=?
+                WHERE owner_id=? AND id=?
+            """, (
+                race_name_id,
+                race_date.isoformat(),
+                int(program),
+                int(distance),
+                int(horses),
+                class_id,
+                venue_id,
+                owner_id,
+                template_id,
+            ))
+
+            conn.commit()
+
+        except Exception:
+            conn.rollback()
+            raise
+
+    finally:
+        conn.close()
+
+
+def _rt_delete(owner_id, template_id, expected):
+    conn = _rf_db()
+
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+
+        try:
+            _rt_current(
+                conn,
+                owner_id,
+                template_id,
+                expected,
+            )
+
+            if conn.execute(
+                "SELECT 1 FROM rf_blog_posts "
+                "WHERE template_id=? LIMIT 1",
+                (template_id,),
+            ).fetchone():
+                raise ValueError(
+                    "This template is linked to a blog article "
+                    "and cannot be deleted. Edit the linked articles "
+                    "and select another template first."
+                )
+
+            cursor = conn.execute(
+                "DELETE FROM rf_race_templates "
+                "WHERE owner_id=? AND id=?",
+                (owner_id, template_id),
+            )
+
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "This template is unavailable."
+                )
+
+            conn.commit()
+
+        except Exception:
+            conn.rollback()
+            raise
+
+    finally:
+        conn.close()
+
+
+def _rt_reload(owner_id, template_id):
+    st.session_state.pop(
+        f"rt_snapshot_{owner_id}_{template_id}",
+        None,
+    )
+
+    key = f"rt_generation_{owner_id}_{template_id}"
+
+    st.session_state[key] = (
+        st.session_state.get(key, 0) + 1
+    )
+
+
+def _rt_manage(owner_id):
+    st.markdown("---")
+    st.subheader("Edit or Delete Race Templates")
+
+    notice = st.session_state.pop(
+        f"rt_notice_{owner_id}",
+        None,
+    )
+
+    if notice:
+        st.success(notice)
+
+    rows = _rf_templates(owner_id)
+
+    if not rows:
+        st.info("No race templates are registered.")
+        return
+
+    lookup = {
+        row["id"]: row
+        for row in rows
+    }
+
+    selected = st.selectbox(
+        "Template to edit or delete",
+        list(lookup),
+        format_func=lambda value: (
+            f"#{value} | {_rf_label(lookup[value])}"
+        ),
+        key=f"rt_selected_{owner_id}",
+    )
+
+    current = lookup[selected]
+    snapshot_key = f"rt_snapshot_{owner_id}_{selected}"
+
+    if snapshot_key not in st.session_state:
+        st.session_state[snapshot_key] = dict(current)
+
+    saved = st.session_state[snapshot_key]
+
+    st.button(
+        "Reload Stored Template",
+        key=f"rt_reload_{owner_id}_{selected}",
+        on_click=_rt_reload,
+        args=(owner_id, selected),
+        help=(
+            "Discard the editor's unsaved fields "
+            "and load the current template."
+        ),
+    )
+
+    if any(
+        current.get(key) != saved.get(key)
+        for key in _rt_fields()
+    ):
+        st.warning(
+            "The stored template changed. "
+            "Reload it before saving or deleting."
+        )
+
+    generation = st.session_state.get(
+        f"rt_generation_{owner_id}_{selected}",
+        0,
+    )
+
+    prefix = (
+        f"rt_edit_{owner_id}_{selected}_{generation}"
+    )
+
+    names = {
+        row["id"]: row["race_name"]
+        for row in get_user_race_names(owner_id)
+    }
+
+    venues = {
+        row["id"]: row["venue_name"]
+        for row in get_user_venues(owner_id)
+    }
+
+    class_ids, class_labels = _rf_class_options(owner_id)
+    classes = dict(zip(class_ids, class_labels))
+
+    name_ids = [None] + list(names)
+    venue_ids = [None] + list(venues)
+
+    initial_name = (
+        saved.get("race_name_id")
+        if saved.get("race_name_id") in names
+        else None
+    )
+
+    initial_venue = (
+        saved.get("venue_id")
+        if saved.get("venue_id") in venues
+        else None
+    )
+
+    initial_class = (
+        saved.get("race_class_id")
+        if saved.get("race_class_id") in classes
+        else None
+    )
+
+    try:
+        initial_date = date.fromisoformat(
+            saved["race_date"]
+        )
+
+    except (ValueError, TypeError):
+        initial_date = date.today()
+
+        st.warning(
+            "The stored date is invalid. "
+            "Choose the correct date before saving."
+        )
+
+    initial_date = max(
+        date(1980, 1, 1),
+        min(date(2100, 12, 31), initial_date),
+    )
+
+    st.caption(
+        "Edits preserve the template ID and its blog links. "
+        "Existing checklist records are not changed. "
+        "Choosing a different race name does not rename "
+        "the shared Race Names entry."
+    )
+
+    with st.form(prefix):
+        name_id = st.selectbox(
+            "Race name",
+            name_ids,
+            index=name_ids.index(initial_name),
+            format_func=lambda value: (
+                "(Use a new race name)"
+                if value is None
+                else names[value]
+            ),
+            key=prefix + "_name",
+        )
+
+        new_name = st.text_input(
+            "New race name — only used when "
+            "Use a new race name is selected",
+            max_chars=200,
+            key=prefix + "_new_name",
+        )
+
+        venue_id = st.selectbox(
+            "Venue",
+            venue_ids,
+            index=venue_ids.index(initial_venue),
+            format_func=lambda value: (
+                "(Select a venue)"
+                if value is None
+                else venues[value]
+            ),
+            key=prefix + "_venue",
+        )
+
+        race_date = st.date_input(
+            "Race date",
+            value=initial_date,
+            min_value=date(1980, 1, 1),
+            max_value=date(2100, 12, 31),
+            key=prefix + "_date",
+        )
+
+        program = st.number_input(
+            "Program number",
+            min_value=1,
+            max_value=12,
+            value=max(
+                1,
+                min(
+                    12,
+                    int(saved.get("program_number") or 1),
+                ),
+            ),
+            key=prefix + "_program",
+        )
+
+        distance = st.number_input(
+            "Distance (meters)",
+            min_value=1,
+            max_value=5000,
+            value=max(
+                1,
+                min(
+                    5000,
+                    int(saved.get("distance") or 1600),
+                ),
+            ),
+            step=100,
+            key=prefix + "_distance",
+        )
+
+        horses = st.number_input(
+            "Number of horses",
+            min_value=1,
+            max_value=18,
+            value=max(
+                1,
+                min(
+                    18,
+                    int(saved.get("number_of_horses") or 18),
+                ),
+            ),
+            key=prefix + "_horses",
+        )
+
+        class_id = st.selectbox(
+            "Race class",
+            class_ids,
+            index=class_ids.index(initial_class),
+            format_func=lambda value: classes[value],
+            key=prefix + "_class",
+        )
+
+        submit = st.form_submit_button(
+            "Save Template Changes"
+        )
+
+    if submit:
+        try:
+            _rt_update(
+                owner_id,
+                selected,
+                saved,
+                name_id,
+                new_name,
+                race_date,
+                program,
+                distance,
+                horses,
+                class_id,
+                venue_id,
+            )
+
+        except sqlite3.IntegrityError:
+            st.error(
+                "Changes were not saved. Another template may "
+                "already use that race name, date, and program "
+                "number, or a referenced item is unavailable. "
+                "No other template was overwritten."
+            )
+
+        except (ValueError, sqlite3.Error) as error:
+            st.error(
+                f"Changes were not saved: {error}"
+            )
+
+        else:
+            _rt_reload(owner_id, selected)
+
+            st.session_state[
+                f"rt_notice_{owner_id}"
+            ] = f"Template #{selected} updated."
+
+            st.rerun()
+
+    with st.expander(
+        "Delete Selected Template",
+        expanded=False,
+    ):
+        linked = _rf_rows(
+            "SELECT COUNT(*) AS n FROM rf_blog_posts "
+            "WHERE template_id=?",
+            (selected,),
+        )[0]["n"]
+
+        if linked:
+            st.warning(
+                f"This template has {linked} linked blog article(s). "
+                "Move those articles to another template "
+                "before deleting it."
+            )
+
+        st.caption(
+            "Deletion removes only this saved template. "
+            "It does not delete checklists, race names, venues, "
+            "classes, articles, tags, or images."
+        )
+
+        confirmed = st.checkbox(
+            f"Permanently delete template #{selected}",
+            key=prefix + "_confirm_delete",
+        )
+
+        if st.button(
+            "Delete Template Permanently",
+            key=prefix + "_delete",
+            disabled=not confirmed or bool(linked),
+        ):
+            try:
+                _rt_delete(
+                    owner_id,
+                    selected,
+                    saved,
+                )
+
+            except (ValueError, sqlite3.Error) as error:
+                st.error(
+                    f"Template was not deleted: {error}"
+                )
+
+            else:
+                _rt_reload(owner_id, selected)
+
+                st.session_state[
+                    f"rt_notice_{owner_id}"
+                ] = f"Template #{selected} deleted."
+
+                st.rerun()
+
 def _rb_migrate():
     conn = _rf_db()
     try:
@@ -647,220 +1493,37 @@ def _rb_edit_article(owner_id, post, templates):
 
 
 def _rb_page(owner_id):
-    st.header("Race Blog")
-    st.caption(
-        "Private articles for your account. "
-        "Add tags by typing a tag and pressing Enter."
-    )
-
-    notice = st.session_state.pop(
-        f"rb_blog_notice_{owner_id}",
-        None,
-    )
-
+    st.header('Race Blog')
+    st.caption('Private articles for your account. Add tags by typing a tag and pressing Enter.')
+    notice = st.session_state.pop(f'rb_blog_notice_{owner_id}', None)
     if notice:
         st.success(notice)
-
-    templates = {
-        row["id"]: row
-        for row in _rf_templates(owner_id)
-    }
-
-    generation_key = f"rb_create_generation_{owner_id}"
+    templates = {row['id']: row for row in _rf_templates(owner_id)}
+    generation_key = f'rb_create_generation_{owner_id}'
     generation = st.session_state.get(generation_key, 0)
-    prefix = f"rb_create_{owner_id}_{generation}"
-
-    with st.expander("Write a Race Blog Article", expanded=False):
+    prefix = f'rb_create_{owner_id}_{generation}'
+    with st.expander('Write a Race Blog Article', expanded=False):
         if not templates:
-            st.info("Create a race template first.")
-
+            st.info('Create a race template first.')
         else:
             with st.form(prefix):
-                template_id = st.selectbox(
-                    "Race template for this article",
-                    list(templates),
-                    format_func=lambda value: _rf_label(
-                        templates[value]
-                    ),
-                    key=prefix + "_template",
-                )
-
-                title = st.text_input(
-                    "Article title",
-                    max_chars=200,
-                    key=prefix + "_title",
-                )
-
-                body = st.text_area(
-                    "Article text — Markdown supported",
-                    height=280,
-                    max_chars=200_000,
-                    key=prefix + "_body",
-                )
-
-                tags = _rb_tag_input(
-                    owner_id,
-                    "Tags — type a tag and press Enter",
-                    prefix + "_tags",
-                )
-
-                uploads = st.file_uploader(
-                    "Images — up to six, 5 MB each",
-                    type=["jpg", "jpeg", "png", "webp"],
-                    accept_multiple_files=True,
-                    key=prefix + "_uploads",
-                )
-
-                save = st.form_submit_button("Save Blog Article")
-
+                template_id = st.selectbox('Race template for this article', list(templates), format_func=lambda value: _rf_label(templates[value]), key=prefix + '_template')
+                title = st.text_input('Article title', max_chars=200, key=prefix + '_title')
+                body = st.text_area('Article text — Markdown supported', height=280, max_chars=200000, key=prefix + '_body')
+                tags = _rb_tag_input(owner_id, 'Tags — type a tag and press Enter', prefix + '_tags')
+                uploads = st.file_uploader('Images — up to six, 5 MB each', type=['jpg', 'jpeg', 'png', 'webp'], accept_multiple_files=True, key=prefix + '_uploads')
+                save = st.form_submit_button('Save Blog Article')
             if save:
                 try:
-                    post_id = _rb_save(
-                        owner_id,
-                        template_id,
-                        title,
-                        body,
-                        tags,
-                        uploads,
-                    )
-
+                    post_id = _rb_save(owner_id, template_id, title, body, tags, uploads)
                 except Exception as error:
-                    st.error(f"Article was not saved: {error}")
-
+                    st.error(f'Article was not saved: {error}')
                 else:
                     st.session_state[generation_key] = generation + 1
-
-                    st.session_state[
-                        f"rb_blog_notice_{owner_id}"
-                    ] = f"Article #{post_id} saved."
-
+                    st.session_state[f'rb_blog_notice_{owner_id}'] = f'Article #{post_id} saved.'
                     st.rerun()
+    _rbl_render(owner_id, templates)
 
-    st.subheader("Search Articles")
-
-    query = st.text_input(
-        "Search titles, article text, or tags",
-        key=f"rb_search_text_{owner_id}",
-    )
-
-    tag_filter = _rb_tag_input(
-        owner_id,
-        "Require tags — all selected tags must match",
-        f"rb_search_tags_{owner_id}",
-    )
-
-    try:
-        count, rows = _rb_search(owner_id, query, tag_filter)
-
-    except ValueError as error:
-        st.error(str(error))
-        return
-
-    st.caption(f"{count:,} matching article(s).")
-
-    if not count:
-        return
-
-    page = st.selectbox(
-        "Article results page",
-        range(1, (count + 19) // 20 + 1),
-    )
-
-    if page != 1:
-        _, rows = _rb_search(
-            owner_id,
-            query,
-            tag_filter,
-            page,
-        )
-
-    lookup = {
-        row["id"]: row for row in rows
-    }
-
-    selected = st.selectbox(
-        "Read or edit an article",
-        [None] + list(lookup),
-        format_func=lambda value: (
-            "(Select an article)"
-            if value is None
-            else (
-                f"#{value} | {lookup[value]['title']} | "
-                f"{lookup[value]['created_at']}"
-            )
-        ),
-    )
-
-    if selected is None:
-        return
-
-    found = _rf_rows(
-        "SELECT * FROM rf_blog_posts "
-        "WHERE owner_id = ? AND id = ?",
-        (owner_id, selected),
-    )
-
-    if not found:
-        st.info("The article is no longer available.")
-        return
-
-    post = found[0]
-
-    st.subheader(post["title"])
-    st.caption("Created: " + post["created_at"])
-
-    if post.get("updated_at"):
-        st.caption("Updated: " + post["updated_at"])
-
-    template = templates.get(post["template_id"])
-
-    if template:
-        st.caption(_rf_label(template))
-
-    tags = _rb_post_tags(owner_id, post["id"])
-
-    if tags:
-        # JSON representation distinguishes tags that contain commas.
-        st.caption(
-            "Tags: " + json.dumps(tags, ensure_ascii=False)
-        )
-
-    st.markdown(
-        post["body"],
-        unsafe_allow_html=False,
-    )
-
-    if st.checkbox(
-        "Load article images",
-        key=f"rb_show_images_{owner_id}_{post['id']}",
-    ):
-        images = _rf_rows(
-            "SELECT filename, image_data FROM rf_blog_images "
-            "WHERE owner_id = ? AND post_id = ? ORDER BY id",
-            (owner_id, post["id"]),
-        )
-
-        if not images:
-            st.caption("This article has no images.")
-
-        for image in images:
-            st.image(
-                bytes(image["image_data"]),
-                caption=image["filename"],
-            )
-
-    with st.expander("Edit This Article", expanded=False):
-        st.caption(
-            "Changes affect only this article. "
-            "Existing images are retained unless explicitly selected "
-            "for removal. Nothing is saved until Save Article Changes."
-        )
-
-        _rb_edit_article(
-            owner_id,
-            post,
-            templates,
-        )
 
 def _rf_venue_migrate():
     conn = _rf_db()
@@ -1271,6 +1934,8 @@ def _rf_templates_page(owner_id):
     else:
         st.info('No race templates registered yet.')
     _rf_venue_existing_editor(owner_id)
+    _rt_manage(owner_id)
+
 
 
 
