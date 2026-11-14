@@ -14,7 +14,7 @@ DB_PATH = "data/horse_checklist_app.db"
 
 # CHECKLIST_REVIEW_ONLY_WIDE_LAYOUT_V1
 # RACE_CHECKLIST_AND_REVIEW_WIDE_LAYOUT_V1
-st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session_state.get('logged_in', False) and st.session_state.get('app_navigation_page', 'Race Checklist') in ('Race Checklist', 'Checklist Review') else 'centered')
+st.set_page_config(page_title='Horse Checklist App', layout='wide')
 
 
 # -------------------------------------------------
@@ -30,6 +30,1373 @@ st.set_page_config(page_title='Horse Checklist App', layout='wide' if st.session
 
 
 # REVIEW_PAGE_SIZE_DEFAULT_STATE_FIX_V1
+# RACE_FEATURES_20261114_V2
+_RF_UNSET = object()
+
+
+# RACE_TEMPLATE_VENUE_AND_EDITOR_LOAD_V1
+
+# RACE_BLOG_EDIT_AND_ENTER_TAGS_V1
+
+def _rb_migrate():
+    conn = _rf_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            columns = {
+                row["name"]
+                for row in conn.execute(
+                    "PRAGMA table_info(rf_blog_posts)"
+                )
+            }
+
+            if not columns:
+                raise RuntimeError(
+                    "Race-blog tables are missing. "
+                    "Install the race-feature update first."
+                )
+
+            if "revision" not in columns:
+                conn.execute(
+                    "ALTER TABLE rf_blog_posts "
+                    "ADD COLUMN revision INTEGER NOT NULL DEFAULT 0"
+                )
+
+            if "updated_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE rf_blog_posts "
+                    "ADD COLUMN updated_at TEXT"
+                )
+
+            conn.commit()
+
+        except Exception:
+            conn.rollback()
+            raise
+
+    finally:
+        conn.close()
+
+
+def _rb_tags(values):
+    # Strings are treated as newline-separated, never comma-separated.
+    if isinstance(values, str):
+        values = values.splitlines()
+
+    result = {}
+
+    for value in values or []:
+        tag = str(value).strip()
+
+        if not tag:
+            continue
+
+        if "\n" in tag or "\r" in tag:
+            raise ValueError("Each tag must occupy a single line.")
+
+        if len(tag) > 60:
+            raise ValueError(
+                "Each tag must be 60 characters or fewer."
+            )
+
+        result.setdefault(tag.casefold(), tag)
+
+    if len(result) > 20:
+        raise ValueError("Use no more than 20 tags.")
+
+    return result
+
+
+def _rb_tag_options(owner_id):
+    rows = _rf_rows("""
+        SELECT DISTINCT t.name, t.normalized
+        FROM rf_blog_tags t
+        JOIN rf_blog_post_tags pt ON pt.tag_id = t.id
+        JOIN rf_blog_posts p ON p.id = pt.post_id
+        WHERE t.owner_id = ? AND p.owner_id = ?
+        ORDER BY t.normalized
+    """, (owner_id, owner_id))
+
+    return [row["name"] for row in rows]
+
+
+def _rb_tag_input(owner_id, label, key, initial=None):
+    import inspect
+
+    initial = list(_rb_tags(initial or []).values())
+    options = {}
+
+    for value in _rb_tag_options(owner_id) + initial:
+        options.setdefault(value.casefold(), value)
+
+    # Keep the initial spelling in the available/default selections.
+    for value in initial:
+        options[value.casefold()] = value
+
+    available = list(options.values())
+
+    try:
+        parameters = inspect.signature(
+            st.multiselect
+        ).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    if "accept_new_options" in parameters:
+        kwargs = {
+            "label": label,
+            "options": available,
+            "default": initial,
+            "key": key,
+            "accept_new_options": True,
+            "max_selections": 20,
+            "help": (
+                "Type a tag and press Enter to add it. "
+                "Use the x on a tag to remove it. "
+                "Commas are not separators."
+            ),
+        }
+
+        # Avoid Enter accidentally selecting all matching options
+        # on versions that provide this setting.
+        if "select_all" in parameters:
+            kwargs["select_all"] = False
+
+        return st.multiselect(**kwargs)
+
+    text = st.text_area(
+        label + " — one tag per line",
+        value="\n".join(initial),
+        key=key,
+        height=100,
+        help=(
+            "Press Enter after each tag. "
+            "Each nonempty line becomes one tag. "
+            "Commas are not separators."
+        ),
+    )
+
+    return [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip()
+    ]
+
+
+def _rb_post_tags(owner_id, post_id):
+    rows = _rf_rows("""
+        SELECT t.name
+        FROM rf_blog_post_tags pt
+        JOIN rf_blog_tags t ON t.id = pt.tag_id
+        JOIN rf_blog_posts p ON p.id = pt.post_id
+        WHERE p.owner_id = ?
+          AND p.id = ?
+          AND t.owner_id = ?
+        ORDER BY t.normalized
+    """, (owner_id, post_id, owner_id))
+
+    return [row["name"] for row in rows]
+
+
+def _rb_image_metadata(owner_id, post_id):
+    return _rf_rows("""
+        SELECT id, filename, mime_type,
+               length(image_data) AS byte_count
+        FROM rf_blog_images
+        WHERE owner_id = ? AND post_id = ?
+        ORDER BY id
+    """, (owner_id, post_id))
+
+
+def _rb_save(
+    owner_id,
+    template_id,
+    title,
+    body,
+    tag_values,
+    uploads,
+    post_id=None,
+    expected_revision=None,
+    remove_image_ids=None,
+):
+    title = str(title or "").strip()
+    body = str(body or "").strip()
+
+    if not title or len(title) > 200:
+        raise ValueError(
+            "Enter an article title of 1–200 characters."
+        )
+
+    if not body or len(body) > 200_000:
+        raise ValueError(
+            "Enter article text of 1–200,000 characters."
+        )
+
+    tags = _rb_tags(tag_values)
+    removals = set(remove_image_ids or [])
+
+    if any(
+        isinstance(value, bool) or not isinstance(value, int)
+        for value in removals
+    ):
+        raise ValueError("Invalid image selection.")
+
+    if post_id is not None:
+        existing = _rf_rows(
+            "SELECT id FROM rf_blog_posts "
+            "WHERE owner_id = ? AND id = ?",
+            (owner_id, post_id),
+        )
+
+        if not existing:
+            raise ValueError(
+                "The article is unavailable for this account."
+            )
+
+        if expected_revision is None:
+            raise ValueError(
+                "The article revision is missing. Reload the article."
+            )
+
+    elif removals:
+        raise ValueError(
+            "Images cannot be removed from an unsaved article."
+        )
+
+    # Reuse the existing image validation/normalization.
+    prepared_images = _rf_images(list(uploads or []))
+
+    # Validates ownership of the associated template.
+    _rf_template(owner_id, template_id)
+
+    conn = _rf_db()
+
+    try:
+        with conn:
+            if not conn.execute(
+                "SELECT 1 FROM rf_race_templates "
+                "WHERE owner_id = ? AND id = ?",
+                (owner_id, template_id),
+            ).fetchone():
+                raise ValueError(
+                    "The selected race template is unavailable."
+                )
+
+            if post_id is None:
+                cursor = conn.execute("""
+                    INSERT INTO rf_blog_posts(
+                        owner_id, template_id, title, body,
+                        revision, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 0, NULL)
+                """, (
+                    owner_id,
+                    template_id,
+                    title,
+                    body,
+                ))
+
+                saved_id = cursor.lastrowid
+                old_images = []
+
+            else:
+                cursor = conn.execute("""
+                    UPDATE rf_blog_posts
+                    SET template_id = ?,
+                        title = ?,
+                        body = ?,
+                        updated_at = CURRENT_TIMESTAMP,
+                        revision = revision + 1
+                    WHERE owner_id = ?
+                      AND id = ?
+                      AND revision = ?
+                """, (
+                    template_id,
+                    title,
+                    body,
+                    owner_id,
+                    post_id,
+                    int(expected_revision),
+                ))
+
+                if cursor.rowcount != 1:
+                    raise ValueError(
+                        "This article changed after you opened the editor. "
+                        "Your changes were not saved. Copy any text you "
+                        "want to keep, then click Reload Stored Article."
+                    )
+
+                saved_id = post_id
+
+                old_images = [
+                    dict(row)
+                    for row in conn.execute("""
+                        SELECT id, length(image_data) AS byte_count
+                        FROM rf_blog_images
+                        WHERE owner_id = ? AND post_id = ?
+                    """, (owner_id, saved_id))
+                ]
+
+            valid_image_ids = {
+                row["id"] for row in old_images
+            }
+
+            if not removals.issubset(valid_image_ids):
+                raise ValueError(
+                    "An image selected for removal is unavailable."
+                )
+
+            retained_images = [
+                row
+                for row in old_images
+                if row["id"] not in removals
+            ]
+
+            if len(retained_images) + len(prepared_images) > 6:
+                raise ValueError(
+                    "An article can contain at most six images. "
+                    "Select existing images for removal before "
+                    "adding more."
+                )
+
+            retained_bytes = sum(
+                row["byte_count"] or 0
+                for row in retained_images
+            )
+
+            new_bytes = sum(
+                len(data)
+                for _, _, data in prepared_images
+            )
+
+            if retained_bytes + new_bytes > 20 * 1024 * 1024:
+                raise ValueError(
+                    "Combined stored images for this article "
+                    "must not exceed 20 MB."
+                )
+
+            # Replace only this article's tag associations.
+            conn.execute(
+                "DELETE FROM rf_blog_post_tags WHERE post_id = ?",
+                (saved_id,),
+            )
+
+            for normalized, name in tags.items():
+                conn.execute("""
+                    INSERT INTO rf_blog_tags(
+                        owner_id, name, normalized
+                    )
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(owner_id, normalized) DO NOTHING
+                """, (owner_id, name, normalized))
+
+                tag_id = conn.execute(
+                    "SELECT id FROM rf_blog_tags "
+                    "WHERE owner_id = ? AND normalized = ?",
+                    (owner_id, normalized),
+                ).fetchone()["id"]
+
+                conn.execute(
+                    "INSERT INTO rf_blog_post_tags(post_id, tag_id) "
+                    "VALUES (?, ?)",
+                    (saved_id, tag_id),
+                )
+
+            for image_id in removals:
+                conn.execute(
+                    "DELETE FROM rf_blog_images "
+                    "WHERE owner_id = ? AND post_id = ? AND id = ?",
+                    (owner_id, saved_id, image_id),
+                )
+
+            for filename, mime, data in prepared_images:
+                conn.execute("""
+                    INSERT INTO rf_blog_images(
+                        owner_id, post_id, filename,
+                        mime_type, image_data
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                """, (
+                    owner_id,
+                    saved_id,
+                    filename,
+                    mime,
+                    sqlite3.Binary(data),
+                ))
+
+        return saved_id
+
+    finally:
+        conn.close()
+
+
+def _rb_search(owner_id, query, tag_values, page=1):
+    required_tags = _rb_tags(tag_values)
+    clauses = ["p.owner_id = ?"]
+    parameters = [owner_id]
+    query = str(query or "").strip()
+
+    if query:
+        clauses.append("""
+            (
+                instr(
+                    RF_CASEFOLD(p.title || ' ' || p.body),
+                    RF_CASEFOLD(?)
+                ) > 0
+                OR EXISTS (
+                    SELECT 1
+                    FROM rf_blog_post_tags pt
+                    JOIN rf_blog_tags t ON t.id = pt.tag_id
+                    WHERE pt.post_id = p.id
+                      AND t.owner_id = p.owner_id
+                      AND instr(t.normalized, RF_CASEFOLD(?)) > 0
+                )
+            )
+        """)
+
+        parameters.extend([query, query])
+
+    for normalized in required_tags:
+        clauses.append("""
+            EXISTS (
+                SELECT 1
+                FROM rf_blog_post_tags pt
+                JOIN rf_blog_tags t ON t.id = pt.tag_id
+                WHERE pt.post_id = p.id
+                  AND t.owner_id = p.owner_id
+                  AND t.normalized = ?
+            )
+        """)
+
+        parameters.append(normalized)
+
+    where = " AND ".join(clauses)
+
+    count = _rf_rows(
+        "SELECT COUNT(*) AS n FROM rf_blog_posts p WHERE " + where,
+        parameters,
+    )[0]["n"]
+
+    rows = _rf_rows(
+        "SELECT p.id, p.title, p.created_at, p.updated_at "
+        "FROM rf_blog_posts p WHERE "
+        + where
+        + " ORDER BY p.id DESC LIMIT 20 OFFSET ?",
+        parameters + [max(0, int(page) - 1) * 20],
+    )
+
+    return count, rows
+
+
+def _rb_reload_editor(owner_id, post_id):
+    st.session_state.pop(
+        f"rb_edit_snapshot_{owner_id}_{post_id}",
+        None,
+    )
+
+    generation_key = f"rb_edit_generation_{owner_id}_{post_id}"
+
+    st.session_state[generation_key] = (
+        st.session_state.get(generation_key, 0) + 1
+    )
+
+
+def _rb_edit_article(owner_id, post, templates):
+    post_id = post["id"]
+    snapshot_key = f"rb_edit_snapshot_{owner_id}_{post_id}"
+
+    if snapshot_key not in st.session_state:
+        st.session_state[snapshot_key] = {
+            "revision": int(post["revision"]),
+            "title": post["title"],
+            "body": post["body"],
+            "template_id": post["template_id"],
+            "tags": _rb_post_tags(owner_id, post_id),
+        }
+
+    snapshot = st.session_state[snapshot_key]
+
+    st.button(
+        "Reload Stored Article",
+        key=f"rb_reload_article_{owner_id}_{post_id}",
+        on_click=_rb_reload_editor,
+        args=(owner_id, post_id),
+        help=(
+            "Discard this editor's unsaved fields and reload "
+            "the stored article on the next render."
+        ),
+    )
+
+    if int(post["revision"]) != snapshot["revision"]:
+        st.warning(
+            "The stored article has changed since this editor "
+            "was opened. Copy any unsaved text you want to retain, "
+            "then reload before saving."
+        )
+
+    if not templates:
+        st.info(
+            "A race template is required to save an article."
+        )
+        return
+
+    template_ids = list(templates)
+    initial_template = snapshot["template_id"]
+
+    if initial_template not in templates:
+        initial_template = template_ids[0]
+        st.warning(
+            "The original race template is unavailable. "
+            "Choose a replacement before saving."
+        )
+
+    generation = st.session_state.get(
+        f"rb_edit_generation_{owner_id}_{post_id}",
+        0,
+    )
+
+    prefix = (
+        f"rb_edit_{owner_id}_{post_id}_"
+        f"{snapshot['revision']}_{generation}"
+    )
+
+    image_rows = _rb_image_metadata(owner_id, post_id)
+    image_lookup = {
+        row["id"]: row for row in image_rows
+    }
+
+    with st.form(prefix):
+        template_id = st.selectbox(
+            "Race template",
+            template_ids,
+            index=template_ids.index(initial_template),
+            format_func=lambda value: _rf_label(templates[value]),
+            key=prefix + "_template",
+        )
+
+        title = st.text_input(
+            "Article title",
+            value=snapshot["title"],
+            max_chars=200,
+            key=prefix + "_title",
+        )
+
+        body = st.text_area(
+            "Article text — Markdown supported",
+            value=snapshot["body"],
+            max_chars=200_000,
+            height=320,
+            key=prefix + "_body",
+        )
+
+        tags = _rb_tag_input(
+            owner_id,
+            "Tags — type a tag and press Enter",
+            prefix + "_tags",
+            snapshot["tags"],
+        )
+
+        removals = st.multiselect(
+            "Existing images to remove — leave empty to keep all",
+            list(image_lookup),
+            format_func=lambda value: (
+                f"#{value} — {image_lookup[value]['filename']}"
+            ),
+            key=prefix + "_remove_images",
+        )
+
+        uploads = st.file_uploader(
+            "Add images — existing images are kept unless selected above",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=True,
+            key=prefix + "_uploads",
+        )
+
+        st.caption(
+            "Maximum six stored images per article, 20 MB combined. "
+            "New image uploads must be 5 MB or smaller each."
+        )
+
+        save = st.form_submit_button("Save Article Changes")
+
+    if save:
+        try:
+            _rb_save(
+                owner_id,
+                template_id,
+                title,
+                body,
+                tags,
+                uploads,
+                post_id=post_id,
+                expected_revision=snapshot["revision"],
+                remove_image_ids=removals,
+            )
+
+        except Exception as error:
+            st.error(f"Changes were not saved: {error}")
+
+        else:
+            _rb_reload_editor(owner_id, post_id)
+
+            st.session_state[
+                f"rb_blog_notice_{owner_id}"
+            ] = f"Article #{post_id} updated."
+
+            st.rerun()
+
+
+def _rb_page(owner_id):
+    st.header("Race Blog")
+    st.caption(
+        "Private articles for your account. "
+        "Add tags by typing a tag and pressing Enter."
+    )
+
+    notice = st.session_state.pop(
+        f"rb_blog_notice_{owner_id}",
+        None,
+    )
+
+    if notice:
+        st.success(notice)
+
+    templates = {
+        row["id"]: row
+        for row in _rf_templates(owner_id)
+    }
+
+    generation_key = f"rb_create_generation_{owner_id}"
+    generation = st.session_state.get(generation_key, 0)
+    prefix = f"rb_create_{owner_id}_{generation}"
+
+    with st.expander("Write a Race Blog Article", expanded=False):
+        if not templates:
+            st.info("Create a race template first.")
+
+        else:
+            with st.form(prefix):
+                template_id = st.selectbox(
+                    "Race template for this article",
+                    list(templates),
+                    format_func=lambda value: _rf_label(
+                        templates[value]
+                    ),
+                    key=prefix + "_template",
+                )
+
+                title = st.text_input(
+                    "Article title",
+                    max_chars=200,
+                    key=prefix + "_title",
+                )
+
+                body = st.text_area(
+                    "Article text — Markdown supported",
+                    height=280,
+                    max_chars=200_000,
+                    key=prefix + "_body",
+                )
+
+                tags = _rb_tag_input(
+                    owner_id,
+                    "Tags — type a tag and press Enter",
+                    prefix + "_tags",
+                )
+
+                uploads = st.file_uploader(
+                    "Images — up to six, 5 MB each",
+                    type=["jpg", "jpeg", "png", "webp"],
+                    accept_multiple_files=True,
+                    key=prefix + "_uploads",
+                )
+
+                save = st.form_submit_button("Save Blog Article")
+
+            if save:
+                try:
+                    post_id = _rb_save(
+                        owner_id,
+                        template_id,
+                        title,
+                        body,
+                        tags,
+                        uploads,
+                    )
+
+                except Exception as error:
+                    st.error(f"Article was not saved: {error}")
+
+                else:
+                    st.session_state[generation_key] = generation + 1
+
+                    st.session_state[
+                        f"rb_blog_notice_{owner_id}"
+                    ] = f"Article #{post_id} saved."
+
+                    st.rerun()
+
+    st.subheader("Search Articles")
+
+    query = st.text_input(
+        "Search titles, article text, or tags",
+        key=f"rb_search_text_{owner_id}",
+    )
+
+    tag_filter = _rb_tag_input(
+        owner_id,
+        "Require tags — all selected tags must match",
+        f"rb_search_tags_{owner_id}",
+    )
+
+    try:
+        count, rows = _rb_search(owner_id, query, tag_filter)
+
+    except ValueError as error:
+        st.error(str(error))
+        return
+
+    st.caption(f"{count:,} matching article(s).")
+
+    if not count:
+        return
+
+    page = st.selectbox(
+        "Article results page",
+        range(1, (count + 19) // 20 + 1),
+    )
+
+    if page != 1:
+        _, rows = _rb_search(
+            owner_id,
+            query,
+            tag_filter,
+            page,
+        )
+
+    lookup = {
+        row["id"]: row for row in rows
+    }
+
+    selected = st.selectbox(
+        "Read or edit an article",
+        [None] + list(lookup),
+        format_func=lambda value: (
+            "(Select an article)"
+            if value is None
+            else (
+                f"#{value} | {lookup[value]['title']} | "
+                f"{lookup[value]['created_at']}"
+            )
+        ),
+    )
+
+    if selected is None:
+        return
+
+    found = _rf_rows(
+        "SELECT * FROM rf_blog_posts "
+        "WHERE owner_id = ? AND id = ?",
+        (owner_id, selected),
+    )
+
+    if not found:
+        st.info("The article is no longer available.")
+        return
+
+    post = found[0]
+
+    st.subheader(post["title"])
+    st.caption("Created: " + post["created_at"])
+
+    if post.get("updated_at"):
+        st.caption("Updated: " + post["updated_at"])
+
+    template = templates.get(post["template_id"])
+
+    if template:
+        st.caption(_rf_label(template))
+
+    tags = _rb_post_tags(owner_id, post["id"])
+
+    if tags:
+        # JSON representation distinguishes tags that contain commas.
+        st.caption(
+            "Tags: " + json.dumps(tags, ensure_ascii=False)
+        )
+
+    st.markdown(
+        post["body"],
+        unsafe_allow_html=False,
+    )
+
+    if st.checkbox(
+        "Load article images",
+        key=f"rb_show_images_{owner_id}_{post['id']}",
+    ):
+        images = _rf_rows(
+            "SELECT filename, image_data FROM rf_blog_images "
+            "WHERE owner_id = ? AND post_id = ? ORDER BY id",
+            (owner_id, post["id"]),
+        )
+
+        if not images:
+            st.caption("This article has no images.")
+
+        for image in images:
+            st.image(
+                bytes(image["image_data"]),
+                caption=image["filename"],
+            )
+
+    with st.expander("Edit This Article", expanded=False):
+        st.caption(
+            "Changes affect only this article. "
+            "Existing images are retained unless explicitly selected "
+            "for removal. Nothing is saved until Save Article Changes."
+        )
+
+        _rb_edit_article(
+            owner_id,
+            post,
+            templates,
+        )
+
+def _rf_venue_migrate():
+    conn = _rf_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if "venue_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(rf_race_templates)")}:
+                conn.execute("ALTER TABLE rf_race_templates ADD COLUMN venue_id INTEGER REFERENCES venues(id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rf_template_venue ON rf_race_templates(owner_id,venue_id)")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
+def _rf_venue_options(owner_id):
+    rows = get_user_venues(owner_id)
+    return [None]+[r["id"] for r in rows], {r["id"]:r["venue_name"] for r in rows}
+
+
+def _rf_template_venue_input(owner_id):
+    ids, labels = _rf_venue_options(owner_id)
+    if not labels:
+        st.info("Register a venue from the Venues menu before saving a template.")
+    return st.selectbox("Venue — required when saving a template",ids,
+        format_func=lambda value:"(Select a venue)" if value is None else labels[value],
+        key=f"rf_template_venue_{owner_id}")
+
+
+def _rf_templates(owner_id):
+    return _rf_rows("""SELECT t.*,rn.race_name,rc.race_class_name,v.venue_name
+        FROM rf_race_templates t
+        LEFT JOIN race_names rn ON rn.id=t.race_name_id AND rn.owner_id=t.owner_id
+        LEFT JOIN race_classes rc ON rc.id=t.race_class_id AND rc.owner_id=t.owner_id
+        LEFT JOIN venues v ON v.id=t.venue_id AND v.owner_id=t.owner_id
+        WHERE t.owner_id=? ORDER BY t.race_date DESC,t.program_number,t.id DESC""",(owner_id,))
+
+
+def _rf_label(row):
+    return (f"{row['race_date']} | {row.get('venue_name') or '(Venue not set)'} | "
+        f"R{row['program_number']} | {row.get('race_name') or '(Race name unavailable)'} | "
+        f"{row['distance']}m | {row['number_of_horses']} horses"
+        +(f" | {row['race_class_name']}" if row.get("race_class_name") else ""))
+
+
+def _rf_template(owner_id,template_id):
+    row=next((r for r in _rf_templates(owner_id) if r["id"]==template_id),None)
+    if row is None or not row.get("race_name"):
+        raise ValueError("The race template or its race name is unavailable.")
+    _rf_resolve_class(owner_id,None,row["race_class_id"])
+    if row.get("venue_id") is not None and not row.get("venue_name"):
+        raise ValueError("The template's venue is unavailable. Choose a valid venue and save the template again.")
+    return row
+
+
+def _rf_save_template(owner_id,name_id,new_name,race_date,program,distance,horses,class_id,*,venue_id=None):
+    if venue_id is None:
+        raise ValueError("Select a venue before saving the race template.")
+    if not 1<=int(program)<=12 or not 1<=int(distance)<=5000 or not 1<=int(horses)<=18:
+        raise ValueError("Race template numbers are outside the supported ranges.")
+    if not date(1980,1,1)<=race_date<=date(2100,12,31):
+        raise ValueError("Race date must be between 1980 and 2100.")
+    conn=_rf_db()
+    try:
+        with conn:
+            if not conn.execute("SELECT 1 FROM venues WHERE owner_id=? AND id=?",(owner_id,venue_id)).fetchone():
+                raise ValueError("The selected venue does not belong to this account.")
+            if class_id is not None and not conn.execute("SELECT 1 FROM race_classes WHERE owner_id=? AND id=?",(owner_id,class_id)).fetchone():
+                raise ValueError("The selected class does not belong to this account.")
+            if name_id is None:
+                name=new_name.strip()
+                if not name or len(name)>200:
+                    raise ValueError("Enter a race name of 1–200 characters.")
+                found=conn.execute("SELECT id FROM race_names WHERE owner_id=? AND RF_CASEFOLD(race_name)=RF_CASEFOLD(?)",(owner_id,name)).fetchone()
+                name_id=found["id"] if found else conn.execute("INSERT INTO race_names(owner_id,race_name) VALUES (?,?)",(owner_id,name)).lastrowid
+            elif not conn.execute("SELECT 1 FROM race_names WHERE owner_id=? AND id=?",(owner_id,name_id)).fetchone():
+                raise ValueError("Race name does not belong to this account.")
+            conn.execute("""INSERT INTO rf_race_templates
+                (owner_id,race_name_id,race_date,program_number,distance,number_of_horses,race_class_id,venue_id)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(owner_id,race_name_id,race_date,program_number) DO UPDATE SET
+                distance=excluded.distance,number_of_horses=excluded.number_of_horses,
+                race_class_id=excluded.race_class_id,venue_id=excluded.venue_id""",
+                (owner_id,name_id,race_date.isoformat(),int(program),int(distance),int(horses),class_id,venue_id))
+    finally:
+        conn.close()
+
+
+def _rf_load(owner_id,template_id,mode,target_keys=None):
+    try:
+        row=_rf_template(owner_id,template_id)
+        if mode=="registration":
+            values={"selected_race_idx":row["race_name"],"date_of_race":date.fromisoformat(row["race_date"]),
+                "program_number":row["program_number"],"distance":row["distance"],
+                "number_of_horses":row["number_of_horses"],"race_class_id":row["race_class_id"]}
+            if row.get("venue_id") is not None:
+                values["selected_venue_idx"]=row["venue_name"]
+            if not target_keys or any(field not in target_keys for field in values):
+                raise ValueError("Registration widget mapping is incomplete.")
+            for field,value in values.items():
+                st.session_state[target_keys[field]]=value
+            for field in ("selected_race_idx","selected_venue_idx"):
+                if field in values:
+                    st.session_state[target_keys[field]+"_new_name"]=""
+        else:
+            reset_filter_values(owner_id)
+            values={"race_name_id":row["race_name_id"],"race_class_id":row["race_class_id"],
+                "venue_ids":[row["venue_id"]] if row.get("venue_id") is not None else [],
+                "date_from":date.fromisoformat(row["race_date"]),"date_to":date.fromisoformat(row["race_date"]),
+                "program_number":row["program_number"],"number_of_horses":row["number_of_horses"],
+                "distance_from":row["distance"],"distance_to":row["distance"],"enable_distance_filter":True,
+                "page_number":1,"active_filter_title":"Race template: "+_rf_label(row)}
+            for field,value in values.items():
+                st.session_state[saved_filter_key(owner_id,field)]=value
+            st.session_state[filter_load_version_key(owner_id)]+=1
+            st.session_state[second_filter_key(owner_id,"enabled")]=False
+            st.session_state.pop(_review_filter_restore_key(owner_id),None)
+            st.session_state.pop("selected_review_checklist_id",None)
+        notice="Loaded: "+_rf_label(row)
+        if row.get("venue_id") is None:
+            notice+=". This older template has no venue. Re-save it with a venue; registration venue was not changed and Review has no venue restriction."
+        st.session_state[f"rf_notice_{mode}_{owner_id}"]=notice
+    except (ValueError,sqlite3.Error) as error:
+        st.session_state[f"rf_error_{mode}_{owner_id}"]=str(error)
+
+
+def _rf_venue_editor_key(owner_id,entry_id,field):
+    return f"rf_venue_editor_{owner_id}_{entry_id}_{field}"
+
+
+def _rf_venue_editor_widget(widget_function,*args,**kwargs):
+    key=kwargs.get("key")
+    if key is not None and key in st.session_state:
+        if getattr(widget_function,"__name__","")=="selectbox":
+            kwargs["index"]=None
+        else:
+            kwargs["value"]=None
+    return widget_function(*args,**kwargs)
+
+
+def _rf_venue_load_editor(owner_id,entry_id,template_id):
+    try:
+        if not _rf_rows("SELECT id FROM checklists WHERE owner_id=? AND id=?",(owner_id,entry_id)):
+            raise ValueError("Checklist is unavailable.")
+        row=_rf_template(owner_id,template_id)
+        race_ids=[None]+[r["id"] for r in get_user_race_names(owner_id)]
+        venue_ids=[None]+[r["id"] for r in get_user_venues(owner_id)]
+        values={"edit_race_idx":race_ids.index(row["race_name_id"]),
+            "edit_distance":row["distance"],"edit_date":date.fromisoformat(row["race_date"]),
+            "edit_program_number":row["program_number"],"edit_number_of_horses":row["number_of_horses"]}
+        if row.get("venue_id") is not None:
+            values["edit_venue_idx"]=venue_ids.index(row["venue_id"])
+        for field,value in values.items():
+            st.session_state[_rf_venue_editor_key(owner_id,entry_id,field)]=value
+        st.session_state[f"rf_editor_class_{owner_id}_{entry_id}"]=row["race_class_id"]
+        message="Loaded into editor: "+_rf_label(row)+". Click Update Checklist to save."
+        if row.get("venue_id") is None:
+            message+=" The existing venue was left unchanged."
+        st.session_state[f"rf_venue_editor_notice_{owner_id}_{entry_id}"]=message
+    except (ValueError,sqlite3.Error) as error:
+        st.session_state[f"rf_venue_editor_error_{owner_id}_{entry_id}"]=str(error)
+
+
+def _rf_venue_editor_loader(owner_id,entry):
+    entry_id=entry["id"]
+    notice=st.session_state.pop(f"rf_venue_editor_notice_{owner_id}_{entry_id}",None)
+    error=st.session_state.pop(f"rf_venue_editor_error_{owner_id}_{entry_id}",None)
+    if notice:
+        st.success(notice)
+    if error:
+        st.error(error)
+    with st.expander("Load Race Template into This Checklist",expanded=False):
+        rows=_rf_templates(owner_id)
+        if not rows:
+            st.info("Create a race template first.")
+            return
+        lookup={r["id"]:r for r in rows}
+        selected=st.selectbox("Race template for this checklist",[None]+list(lookup),
+            format_func=lambda value:"(Select a template)" if value is None else _rf_label(lookup[value]),
+            key=f"rf_venue_editor_template_{owner_id}_{entry_id}")
+        st.caption("Loads race name, venue, date, program number, distance, number of horses, and class. It does not change Review filters or save the record until you click Update Checklist.")
+        st.button("Load into Checklist Editor",key=f"rf_venue_editor_load_{owner_id}_{entry_id}",
+            disabled=selected is None,on_click=_rf_venue_load_editor,args=(owner_id,entry_id,selected))
+
+
+def _rf_venue_set_existing(owner_id,template_id,venue_id):
+    if venue_id is None:
+        raise ValueError("Select a venue.")
+    conn=_rf_db()
+    try:
+        with conn:
+            if not conn.execute("SELECT 1 FROM venues WHERE owner_id=? AND id=?",(owner_id,venue_id)).fetchone():
+                raise ValueError("The selected venue does not belong to this account.")
+            cursor=conn.execute("UPDATE rf_race_templates SET venue_id=? WHERE owner_id=? AND id=?",(venue_id,owner_id,template_id))
+            if cursor.rowcount!=1:
+                raise ValueError("Race template is unavailable.")
+    finally:
+        conn.close()
+
+
+def _rf_venue_existing_editor(owner_id):
+    with st.expander("Set Venue on an Existing Template",expanded=False):
+        rows=_rf_templates(owner_id)
+        ids,labels=_rf_venue_options(owner_id)
+        if not rows or len(ids)==1:
+            st.info("Register a race template and at least one venue first.")
+            return
+        lookup={r["id"]:r for r in rows}
+        selected=st.selectbox("Existing race template",list(lookup),
+            format_func=lambda value:_rf_label(lookup[value]),key=f"rf_venue_existing_{owner_id}")
+        row=lookup[selected]
+        current=row.get("venue_id") if row.get("venue_id") in ids else None
+        key=f"rf_venue_existing_choice_{owner_id}_{selected}"
+        venue=st.selectbox("Venue for this template",ids,
+            index=None if key in st.session_state else ids.index(current),
+            format_func=lambda value:"(Select a venue)" if value is None else labels[value],key=key)
+        st.caption("Updates only this template's venue. Its ID, other settings, blog links, and existing checklists are unchanged.")
+        if st.button("Save Template Venue",key=f"rf_venue_existing_save_{owner_id}",disabled=venue is None):
+            try:
+                _rf_venue_set_existing(owner_id,selected,venue)
+                st.success("Template venue saved. Other template settings were preserved.")
+            except (ValueError,sqlite3.Error) as error:
+                st.error(str(error))
+
+def _rf_db():
+    conn = get_db_connection()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.create_function("RF_CASEFOLD", 1, lambda x: str(x or "").casefold())
+    return conn
+
+
+def _rf_rows(sql, args=()):
+    conn = _rf_db()
+    try:
+        return [dict(row) for row in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+
+
+def _rf_migrate():
+    conn = _rf_db()
+    try:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='rf_versions' AND type='table'").fetchone()
+        if exists and conn.execute("SELECT 1 FROM rf_versions WHERE version='20261114-v2'").fetchone():
+            return
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS race_classes (id INTEGER PRIMARY KEY AUTOINCREMENT, owner_id INTEGER NOT NULL REFERENCES users(id), race_class_name TEXT NOT NULL, UNIQUE(owner_id,race_class_name))")
+            if "race_class_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(checklists)")}:
+                conn.execute("ALTER TABLE checklists ADD COLUMN race_class_id INTEGER REFERENCES race_classes(id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rf_checklist_class ON checklists(owner_id,race_class_id)")
+            conn.execute("""CREATE TABLE IF NOT EXISTS rf_race_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL REFERENCES users(id),
+                race_name_id INTEGER NOT NULL REFERENCES race_names(id),
+                race_date TEXT NOT NULL,
+                program_number INTEGER NOT NULL CHECK(program_number BETWEEN 1 AND 12),
+                distance INTEGER NOT NULL CHECK(distance BETWEEN 1 AND 5000),
+                number_of_horses INTEGER NOT NULL CHECK(number_of_horses BETWEEN 1 AND 18),
+                race_class_id INTEGER REFERENCES race_classes(id),
+                UNIQUE(owner_id,race_name_id,race_date,program_number))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS rf_blog_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL REFERENCES users(id),
+                template_id INTEGER NOT NULL REFERENCES rf_race_templates(id),
+                title TEXT NOT NULL, body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS rf_blog_tags (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL, normalized TEXT NOT NULL,
+                UNIQUE(owner_id,normalized))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS rf_blog_post_tags (
+                post_id INTEGER NOT NULL REFERENCES rf_blog_posts(id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES rf_blog_tags(id),
+                PRIMARY KEY(post_id,tag_id))""")
+            conn.execute("""CREATE TABLE IF NOT EXISTS rf_blog_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL REFERENCES users(id),
+                post_id INTEGER NOT NULL REFERENCES rf_blog_posts(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL, mime_type TEXT NOT NULL, image_data BLOB NOT NULL)""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rf_posts_owner ON rf_blog_posts(owner_id,id DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_rf_images_post ON rf_blog_images(owner_id,post_id)")
+            conn.execute("CREATE TABLE IF NOT EXISTS rf_versions(version TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO rf_versions(version) VALUES ('20261114-v2')")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
+def _rf_class_options(owner_id):
+    rows = _rf_rows("SELECT id,race_class_name FROM race_classes WHERE owner_id=? ORDER BY race_class_name COLLATE NOCASE,id", (owner_id,))
+    return [None] + [r["id"] for r in rows], ["(No selection)"] + [r["race_class_name"] for r in rows]
+
+
+def _rf_class_select(owner_id, key, current=None):
+    ids, labels = _rf_class_options(owner_id)
+    current = current if current in ids else None
+    return st.selectbox("Race Class", ids,
+        index=None if key in st.session_state else ids.index(current),
+        format_func=lambda value: labels[ids.index(value)], key=key)
+
+
+def _rf_resolve_class(owner_id, checklist_id, value):
+    if value is _RF_UNSET:
+        if checklist_id is None:
+            return None
+        rows = _rf_rows("SELECT race_class_id FROM checklists WHERE owner_id=? AND id=?", (owner_id,checklist_id))
+        return rows[0]["race_class_id"] if rows else None
+    if value is not None and not _rf_rows("SELECT id FROM race_classes WHERE owner_id=? AND id=?", (owner_id,value)):
+        raise ValueError("The selected race class does not belong to this account.")
+    return value
+
+
+def _rf_enrich(function):
+    import functools
+    @functools.wraps(function)
+    def wrapped(owner_id, *args, **kwargs):
+        records = function(owner_id, *args, **kwargs)
+        rows = _rf_rows("""SELECT c.id,c.race_class_id,rc.race_class_name FROM checklists c
+            LEFT JOIN race_classes rc ON rc.id=c.race_class_id AND rc.owner_id=c.owner_id
+            WHERE c.owner_id=?""", (owner_id,))
+        extra = {r["id"]:r for r in rows}
+        for entry in records:
+            value = extra.get(entry["id"], {})
+            entry["race_class_id"] = value.get("race_class_id")
+            entry["race_class_name"] = value.get("race_class_name") or ""
+        return records
+    return wrapped
+
+
+def _rf_classes_page(owner_id):
+    st.header("Race Classes")
+    with st.form(f"rf_add_class_{owner_id}", clear_on_submit=True):
+        name = st.text_input("New race class", max_chars=100)
+        submitted = st.form_submit_button("Register Race Class")
+    if submitted:
+        if not name.strip():
+            st.error("Enter a race-class name.")
+        else:
+            conn = _rf_db()
+            try:
+                with conn:
+                    conn.execute("INSERT INTO race_classes(owner_id,race_class_name) VALUES (?,?)", (owner_id,name.strip()))
+                st.rerun()
+            except sqlite3.IntegrityError:
+                st.error("This race class is already registered.")
+            finally:
+                conn.close()
+    rows = _rf_rows("SELECT id,race_class_name FROM race_classes WHERE owner_id=? ORDER BY race_class_name", (owner_id,))
+    for row in rows:
+        with st.expander(row["race_class_name"]):
+            with st.form(f"rf_rename_class_{owner_id}_{row['id']}"):
+                name = st.text_input("Race-class name", value=row["race_class_name"], max_chars=100)
+                rename = st.form_submit_button("Rename Race Class")
+            if rename:
+                if not name.strip():
+                    st.error("Enter a race-class name.")
+                    continue
+                conn = _rf_db()
+                try:
+                    with conn:
+                        conn.execute("UPDATE race_classes SET race_class_name=? WHERE owner_id=? AND id=?", (name.strip(),owner_id,row["id"]))
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("This race class already exists.")
+                finally:
+                    conn.close()
+    st.caption("Renaming preserves associations. Class deletion is not enabled.")
+
+
+
+
+
+
+
+
+
+
+def _rf_templates_page(owner_id):
+    st.header('Race Templates')
+    names = {r['id']: r['race_name'] for r in get_user_race_names(owner_id)}
+    st.caption('Saving the same race name, date, and program number updates that template. Existing checklist records do not change.')
+    with st.form(f'rf_template_form_{owner_id}'):
+        name_id = st.selectbox('Existing race name', [None] + list(names), format_func=lambda x: '(Create a new race name)' if x is None else names[x])
+        name = st.text_input('New race name — used only for Create a new race name', max_chars=200)
+        race_date = st.date_input('Race date', value=date.today(), min_value=date(1980, 1, 1), max_value=date(2100, 12, 31))
+        program = st.number_input('Program number', min_value=1, max_value=12, value=1)
+        distance = st.number_input('Distance (meters)', min_value=1, max_value=5000, value=1600, step=100)
+        horses = st.number_input('Number of horses', min_value=1, max_value=18, value=18)
+        class_id = _rf_class_select(owner_id, f'rf_template_class_{owner_id}')
+        rf_template_venue_id = _rf_template_venue_input(owner_id)
+        submitted = st.form_submit_button('Save Race Template')
+    if submitted:
+        try:
+            _rf_save_template(owner_id, name_id, name, race_date, program, distance, horses, class_id, venue_id=rf_template_venue_id)
+            st.success('Race template saved.')
+        except (ValueError, sqlite3.Error) as error:
+            st.error(f'Could not save template: {error}')
+    rows = _rf_templates(owner_id)
+    if rows:
+        st.dataframe(pd.DataFrame([{'ID': r['id'], 'Date': r['race_date'], 'Race': r['race_name'] or '', 'Program': r['program_number'], 'Distance': r['distance'], 'Horses': r['number_of_horses'], 'Class': r['race_class_name'] or '', 'Venue': r.get('venue_name') or '(Not set)'} for r in rows]), hide_index=True, width='stretch')
+    else:
+        st.info('No race templates registered yet.')
+    _rf_venue_existing_editor(owner_id)
+
+
+
+def _rf_seeded_widget(widget_function, *args, **kwargs):
+    key = kwargs.get("key")
+    if key is not None and key in st.session_state:
+        kwargs["value"] = None
+    return widget_function(*args, **kwargs)
+
+
+
+
+def _rf_loader(owner_id, mode, target_keys=None):
+    notice = st.session_state.pop(f"rf_notice_{mode}_{owner_id}",None)
+    error = st.session_state.pop(f"rf_error_{mode}_{owner_id}",None)
+    if notice:
+        st.success(notice)
+    if error:
+        st.error(error)
+    with st.expander("Load Race Template", expanded=False):
+        rows = _rf_templates(owner_id)
+        if not rows:
+            st.info("Create a race template from the Race Templates menu.")
+            return
+        lookup = {r["id"]:r for r in rows}
+        selected = st.selectbox("Race template", [None]+list(lookup), format_func=lambda x: "(Select a template)" if x is None else _rf_label(lookup[x]), key=f"rf_loader_{mode}_{owner_id}")
+        st.caption("Load replaces first-filter conditions with this race's settings and disables the second filter." if mode=="review" else "Load fills race fields. It does not save a checklist.")
+        st.button("Load Race Template", key=f"rf_load_button_{mode}_{owner_id}", disabled=selected is None, on_click=_rf_load, args=(owner_id,selected,mode,target_keys))
+
+
+def _rf_tags(text):
+    tags = {}
+    for part in text.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        if len(value)>60:
+            raise ValueError("Each tag must be 60 characters or fewer.")
+        tags.setdefault(value.casefold(),value)
+    if len(tags)>20:
+        raise ValueError("Use no more than 20 tags.")
+    return tags
+
+
+def _rf_images(uploads):
+    import io
+    import warnings
+    from pathlib import Path
+    from PIL import Image, ImageOps
+    if len(uploads)>6:
+        raise ValueError("Upload no more than six images.")
+    prepared, total = [], 0
+    for upload in uploads:
+        raw = upload.getvalue()
+        if not raw or len(raw)>5*1024*1024:
+            raise ValueError("Each image must be nonempty and no larger than 5 MB.")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw)) as image:
+                if image.format not in {"JPEG","PNG","WEBP"} or image.width*image.height>20_000_000:
+                    raise ValueError("Use JPEG/PNG/WebP images no larger than 20 megapixels.")
+                image.verify()
+            with Image.open(io.BytesIO(raw)) as original:
+                image = ImageOps.exif_transpose(original)
+                image.load()
+                alpha = image.mode in {"RGBA","LA"} or "transparency" in image.info
+                # A fresh image avoids retaining uploaded metadata.
+                pixels = image.convert("RGBA" if alpha else "RGB")
+                clean = Image.new(pixels.mode,pixels.size)
+                clean.paste(pixels)
+                output = io.BytesIO()
+                clean.save(output,format="PNG" if alpha else "JPEG",**({} if alpha else {"quality":90}))
+        data = output.getvalue()
+        total += len(data)
+        if total>20*1024*1024:
+            raise ValueError("Combined processed images must not exceed 20 MB.")
+        name = Path(upload.name.replace("\\","/").split("/")[-1]).stem[:160] or "image"
+        prepared.append((name+(".png" if alpha else ".jpg"), "image/png" if alpha else "image/jpeg",data))
+    return prepared
+
+
+def _rf_save_post(owner_id,template_id,title,body,tag_text,uploads):
+    title, body = title.strip(), body.strip()
+    if not title or not body or len(title)>200 or len(body)>200_000:
+        raise ValueError("Enter a title (1–200 characters) and article text (1–200,000 characters).")
+    tags, images = _rf_tags(tag_text), _rf_images(uploads)
+    _rf_template(owner_id,template_id)
+    conn = _rf_db()
+    try:
+        with conn:
+            if not conn.execute("SELECT 1 FROM rf_race_templates WHERE owner_id=? AND id=?", (owner_id,template_id)).fetchone():
+                raise ValueError("Race template is unavailable.")
+            post_id = conn.execute("INSERT INTO rf_blog_posts(owner_id,template_id,title,body) VALUES (?,?,?,?)", (owner_id,template_id,title,body)).lastrowid
+            for normalized,name in tags.items():
+                conn.execute("INSERT INTO rf_blog_tags(owner_id,name,normalized) VALUES (?,?,?) ON CONFLICT(owner_id,normalized) DO NOTHING", (owner_id,name,normalized))
+                tag_id = conn.execute("SELECT id FROM rf_blog_tags WHERE owner_id=? AND normalized=?", (owner_id,normalized)).fetchone()["id"]
+                conn.execute("INSERT INTO rf_blog_post_tags(post_id,tag_id) VALUES (?,?)", (post_id,tag_id))
+            for name,mime,data in images:
+                conn.execute("INSERT INTO rf_blog_images(owner_id,post_id,filename,mime_type,image_data) VALUES (?,?,?,?,?)", (owner_id,post_id,name,mime,sqlite3.Binary(data)))
+        return post_id
+    finally:
+        conn.close()
+
+
+def _rf_search(owner_id,query,tag_text,page=1):
+    tags = _rf_tags(tag_text)
+    clauses, args = ["p.owner_id=?"], [owner_id]
+    if query.strip():
+        clauses.append("""(instr(RF_CASEFOLD(p.title||' '||p.body),RF_CASEFOLD(?))>0 OR EXISTS (
+            SELECT 1 FROM rf_blog_post_tags pt JOIN rf_blog_tags tg ON tg.id=pt.tag_id
+            WHERE pt.post_id=p.id AND tg.owner_id=p.owner_id AND instr(tg.normalized,RF_CASEFOLD(?))>0))""")
+        args.extend([query.strip(),query.strip()])
+    for tag in tags:
+        clauses.append("""EXISTS (SELECT 1 FROM rf_blog_post_tags pt JOIN rf_blog_tags tg ON tg.id=pt.tag_id
+            WHERE pt.post_id=p.id AND tg.owner_id=p.owner_id AND tg.normalized=?)""")
+        args.append(tag)
+    where = " AND ".join(clauses)
+    count = _rf_rows("SELECT COUNT(*) n FROM rf_blog_posts p WHERE "+where,args)[0]["n"]
+    rows = _rf_rows("SELECT p.id,p.title,p.created_at FROM rf_blog_posts p WHERE "+where+" ORDER BY p.id DESC LIMIT 20 OFFSET ?", args+[max(0,page-1)*20])
+    return count,rows
+
+
+def _rf_blog_page(owner_id):
+    _rb_page(owner_id)
+
+
 def _review_page_size_without_duplicate_default(
     widget_function,
     *args,
@@ -62,241 +1429,39 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            password TEXT NOT NULL
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS invitation_codes (
-            code TEXT PRIMARY KEY,
-            used INTEGER DEFAULT 0
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS horses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            horse_name TEXT NOT NULL,
-            UNIQUE(owner_id, horse_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS horse_owners (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            horse_owner_name TEXT NOT NULL,
-            UNIQUE(owner_id, horse_owner_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS jockeys (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            jockey_name TEXT NOT NULL,
-            UNIQUE(owner_id, jockey_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS trainers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            trainer_name TEXT NOT NULL,
-            UNIQUE(owner_id, trainer_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS breeding_farms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            breeding_farm_name TEXT NOT NULL,
-            UNIQUE(owner_id, breeding_farm_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS stallions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            stallion_name TEXT NOT NULL,
-            UNIQUE(owner_id, stallion_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS criteria (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            criteria_name TEXT NOT NULL,
-            UNIQUE(owner_id, criteria_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS venues (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            venue_name TEXT NOT NULL,
-            UNIQUE(owner_id, venue_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS race_names (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            race_name TEXT NOT NULL,
-            UNIQUE(owner_id, race_name),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS checklists (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            horse_id INTEGER,
-            horse_owner_id INTEGER,
-            jockey_id INTEGER,
-            previous_jockey_id INTEGER,
-            trainer_id INTEGER,
-            breeding_farm_id INTEGER,
-            stallion_id INTEGER,
-            broodmare_sire_id INTEGER,
-            venue_id INTEGER,
-            previous_venue_id INTEGER,
-            race_name_id INTEGER,
-            distance INTEGER,
-            previous_distance INTEGER,
-            previous_race_date TEXT,
-            interval_days INTEGER,
-            weight_change REAL,
-            date_of_race TEXT,
-            memo TEXT,
-            finished_place TEXT,
-            checklist TEXT,
-            program_number INTEGER,
-            number_of_horses INTEGER,
-            odds REAL,
-            prize REAL,
-            bracket_number INTEGER,
-            horse_number INTEGER,
-            horse_weight REAL,
-            FOREIGN KEY(owner_id) REFERENCES users(id),
-            FOREIGN KEY(horse_id) REFERENCES horses(id),
-            FOREIGN KEY(horse_owner_id) REFERENCES horse_owners(id),
-            FOREIGN KEY(jockey_id) REFERENCES jockeys(id),
-            FOREIGN KEY(previous_jockey_id) REFERENCES jockeys(id),
-            FOREIGN KEY(trainer_id) REFERENCES trainers(id),
-            FOREIGN KEY(breeding_farm_id) REFERENCES breeding_farms(id),
-            FOREIGN KEY(stallion_id) REFERENCES stallions(id),
-            FOREIGN KEY(broodmare_sire_id) REFERENCES stallions(id),
-            FOREIGN KEY(venue_id) REFERENCES venues(id),
-            FOREIGN KEY(previous_venue_id) REFERENCES venues(id),
-            FOREIGN KEY(race_name_id) REFERENCES race_names(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS saved_filters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            owner_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            filter_data TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(owner_id, title),
-            FOREIGN KEY(owner_id) REFERENCES users(id)
-        )
-    """)
-
-    cursor.execute("PRAGMA table_info(checklists)")
-    existing_columns = {row["name"] for row in cursor.fetchall()}
-
-    required_columns = {
-        "horse_owner_id": "INTEGER",
-        "jockey_id": "INTEGER",
-        "previous_jockey_id": "INTEGER",
-        "trainer_id": "INTEGER",
-        "breeding_farm_id": "INTEGER",
-        "stallion_id": "INTEGER",
-        "broodmare_sire_id": "INTEGER",
-        "venue_id": "INTEGER",
-        "previous_venue_id": "INTEGER",
-        "race_name_id": "INTEGER",
-        "distance": "INTEGER",
-        "previous_distance": "INTEGER",
-        "previous_race_date": "TEXT",
-        "interval_days": "INTEGER",
-        "weight_change": "REAL",
-        "date_of_race": "TEXT",
-        "memo": "TEXT",
-        "finished_place": "TEXT",
-        "checklist": "TEXT",
-        "program_number": "INTEGER",
-        "number_of_horses": "INTEGER",
-        "odds": "REAL",
-        "prize": "REAL",
-        "bracket_number": "INTEGER",
-        "horse_number": "INTEGER",
-        "horse_weight": "REAL",
-    }
-
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS users (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            username TEXT UNIQUE NOT NULL,\n            display_name TEXT NOT NULL,\n            password TEXT NOT NULL\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS invitation_codes (\n            code TEXT PRIMARY KEY,\n            used INTEGER DEFAULT 0\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS horses (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            horse_name TEXT NOT NULL,\n            UNIQUE(owner_id, horse_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS horse_owners (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            horse_owner_name TEXT NOT NULL,\n            UNIQUE(owner_id, horse_owner_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS jockeys (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            jockey_name TEXT NOT NULL,\n            UNIQUE(owner_id, jockey_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS trainers (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            trainer_name TEXT NOT NULL,\n            UNIQUE(owner_id, trainer_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS breeding_farms (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            breeding_farm_name TEXT NOT NULL,\n            UNIQUE(owner_id, breeding_farm_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS stallions (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            stallion_name TEXT NOT NULL,\n            UNIQUE(owner_id, stallion_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS criteria (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            criteria_name TEXT NOT NULL,\n            UNIQUE(owner_id, criteria_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS venues (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            venue_name TEXT NOT NULL,\n            UNIQUE(owner_id, venue_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS race_names (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            race_name TEXT NOT NULL,\n            UNIQUE(owner_id, race_name),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS checklists (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            horse_id INTEGER,\n            horse_owner_id INTEGER,\n            jockey_id INTEGER,\n            previous_jockey_id INTEGER,\n            trainer_id INTEGER,\n            breeding_farm_id INTEGER,\n            stallion_id INTEGER,\n            broodmare_sire_id INTEGER,\n            venue_id INTEGER,\n            previous_venue_id INTEGER,\n            race_name_id INTEGER,\n            distance INTEGER,\n            previous_distance INTEGER,\n            previous_race_date TEXT,\n            interval_days INTEGER,\n            weight_change REAL,\n            date_of_race TEXT,\n            memo TEXT,\n            finished_place TEXT,\n            checklist TEXT,\n            program_number INTEGER,\n            number_of_horses INTEGER,\n            odds REAL,\n            prize REAL,\n            bracket_number INTEGER,\n            horse_number INTEGER,\n            horse_weight REAL,\n            FOREIGN KEY(owner_id) REFERENCES users(id),\n            FOREIGN KEY(horse_id) REFERENCES horses(id),\n            FOREIGN KEY(horse_owner_id) REFERENCES horse_owners(id),\n            FOREIGN KEY(jockey_id) REFERENCES jockeys(id),\n            FOREIGN KEY(previous_jockey_id) REFERENCES jockeys(id),\n            FOREIGN KEY(trainer_id) REFERENCES trainers(id),\n            FOREIGN KEY(breeding_farm_id) REFERENCES breeding_farms(id),\n            FOREIGN KEY(stallion_id) REFERENCES stallions(id),\n            FOREIGN KEY(broodmare_sire_id) REFERENCES stallions(id),\n            FOREIGN KEY(venue_id) REFERENCES venues(id),\n            FOREIGN KEY(previous_venue_id) REFERENCES venues(id),\n            FOREIGN KEY(race_name_id) REFERENCES race_names(id)\n        )\n    ')
+    cursor.execute('\n        CREATE TABLE IF NOT EXISTS saved_filters (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            title TEXT NOT NULL,\n            filter_data TEXT NOT NULL,\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            UNIQUE(owner_id, title),\n            FOREIGN KEY(owner_id) REFERENCES users(id)\n        )\n    ')
+    cursor.execute('PRAGMA table_info(checklists)')
+    existing_columns = {row['name'] for row in cursor.fetchall()}
+    required_columns = {'horse_owner_id': 'INTEGER', 'jockey_id': 'INTEGER', 'previous_jockey_id': 'INTEGER', 'trainer_id': 'INTEGER', 'breeding_farm_id': 'INTEGER', 'stallion_id': 'INTEGER', 'broodmare_sire_id': 'INTEGER', 'venue_id': 'INTEGER', 'previous_venue_id': 'INTEGER', 'race_name_id': 'INTEGER', 'distance': 'INTEGER', 'previous_distance': 'INTEGER', 'previous_race_date': 'TEXT', 'interval_days': 'INTEGER', 'weight_change': 'REAL', 'date_of_race': 'TEXT', 'memo': 'TEXT', 'finished_place': 'TEXT', 'checklist': 'TEXT', 'program_number': 'INTEGER', 'number_of_horses': 'INTEGER', 'odds': 'REAL', 'prize': 'REAL', 'bracket_number': 'INTEGER', 'horse_number': 'INTEGER', 'horse_weight': 'REAL'}
     for column_name, column_type in required_columns.items():
         if column_name not in existing_columns:
-            cursor.execute(
-                f"ALTER TABLE checklists ADD COLUMN {column_name} {column_type}"
-            )
-
-    cursor.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS unique_owner_horse_date
-        ON checklists (owner_id, horse_id, date_of_race)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_checklists_owner_date
-        ON checklists (owner_id, date_of_race DESC)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_checklists_owner_interval
-        ON checklists (owner_id, interval_days)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_checklists_owner_previous_venue
-        ON checklists (owner_id, previous_venue_id)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_checklists_owner_weight_change
-        ON checklists (owner_id, weight_change)
-    """)
-
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_saved_filters_owner
-        ON saved_filters (owner_id, created_at DESC)
-    """)
-
+            cursor.execute(f'ALTER TABLE checklists ADD COLUMN {column_name} {column_type}')
+    cursor.execute('\n        CREATE UNIQUE INDEX IF NOT EXISTS unique_owner_horse_date\n        ON checklists (owner_id, horse_id, date_of_race)\n    ')
+    cursor.execute('\n        CREATE INDEX IF NOT EXISTS idx_checklists_owner_date\n        ON checklists (owner_id, date_of_race DESC)\n    ')
+    cursor.execute('\n        CREATE INDEX IF NOT EXISTS idx_checklists_owner_interval\n        ON checklists (owner_id, interval_days)\n    ')
+    cursor.execute('\n        CREATE INDEX IF NOT EXISTS idx_checklists_owner_previous_venue\n        ON checklists (owner_id, previous_venue_id)\n    ')
+    cursor.execute('\n        CREATE INDEX IF NOT EXISTS idx_checklists_owner_weight_change\n        ON checklists (owner_id, weight_change)\n    ')
+    cursor.execute('\n        CREATE INDEX IF NOT EXISTS idx_saved_filters_owner\n        ON saved_filters (owner_id, created_at DESC)\n    ')
     conn.commit()
     conn.close()
+    _rf_migrate()
+    _rf_venue_migrate()
+    _rb_migrate()
+
+
+
 
 
 # -------------------------------------------------
@@ -531,7 +1696,8 @@ def second_filter_widget_load_version_key(owner_id, field_name):
 
 # OPTIONAL_DISTANCE_AND_INTERVAL_FILTERS_V1
 def get_filter_defaults():
-    return {'horse_id': None, 'horse_owner_id': None, 'jockey_id': None, 'previous_jockey_id': None, 'trainer_id': None, 'breeding_farm_id': None, 'stallion_id': None, 'broodmare_sire_id': None, 'venue_ids': [], 'previous_venue_id': None, 'race_name_id': None, 'memo_keyword': '', 'program_number': 0, 'number_of_horses': 0, 'odds_from': 0.0, 'odds_to': 999.9, 'prize_from': 0.0, 'prize_to': 1000000000.0, 'criteria': [], 'criteria_mode': 'AND', 'distance_from': 0, 'distance_to': 5000, 'previous_distance_from': 0, 'previous_distance_to': 5000, 'interval_days_from': 0, 'interval_days_to': 9999, 'enable_weight_change_filter': False, 'weight_change_from': -999.9, 'weight_change_to': 999.9, 'date_from': None, 'date_to': None, 'places': [], 'exclude_places': [], 'enable_bracket_filter': False, 'bracket_from': 1, 'bracket_to': 8, 'enable_horse_filter': False, 'horse_from': 1, 'horse_to': 18, 'enable_weight_filter': False, 'weight_from': 0.0, 'weight_to': 999.9, 'page_size': 50, 'page_number': 1, 'enable_distance_filter': False, 'enable_previous_distance_filter': False, 'enable_interval_days_filter': False}
+    return {'horse_id': None, 'horse_owner_id': None, 'jockey_id': None, 'previous_jockey_id': None, 'trainer_id': None, 'breeding_farm_id': None, 'stallion_id': None, 'broodmare_sire_id': None, 'venue_ids': [], 'previous_venue_id': None, 'race_name_id': None, 'memo_keyword': '', 'program_number': 0, 'number_of_horses': 0, 'odds_from': 0.0, 'odds_to': 999.9, 'prize_from': 0.0, 'prize_to': 1000000000.0, 'criteria': [], 'criteria_mode': 'AND', 'distance_from': 0, 'distance_to': 5000, 'previous_distance_from': 0, 'previous_distance_to': 5000, 'interval_days_from': 0, 'interval_days_to': 9999, 'enable_weight_change_filter': False, 'weight_change_from': -999.9, 'weight_change_to': 999.9, 'date_from': None, 'date_to': None, 'places': [], 'exclude_places': [], 'enable_bracket_filter': False, 'bracket_from': 1, 'bracket_to': 8, 'enable_horse_filter': False, 'horse_from': 1, 'horse_to': 18, 'enable_weight_filter': False, 'weight_from': 0.0, 'weight_to': 999.9, 'page_size': 50, 'page_number': 1, 'enable_distance_filter': False, 'enable_previous_distance_filter': False, 'enable_interval_days_filter': False, 'race_class_id': None}
+
 
 
 
@@ -570,57 +1736,25 @@ def initialize_second_filter_defaults(owner_id):
 
 def reset_filter_values(owner_id):
     defaults = get_filter_defaults()
-    defaults["active_filter_title"] = ""
-
-    selectbox_fields = [
-        "horse_id",
-        "horse_owner_id",
-        "jockey_id",
-        "previous_jockey_id",
-        "trainer_id",
-        "breeding_farm_id",
-        "stallion_id",
-        "broodmare_sire_id",
-        "previous_venue_id",
-        "race_name_id",
-    ]
-
+    defaults['active_filter_title'] = ''
+    selectbox_fields = ['horse_id', 'horse_owner_id', 'jockey_id', 'previous_jockey_id', 'trainer_id', 'breeding_farm_id', 'stallion_id', 'broodmare_sire_id', 'previous_venue_id', 'race_name_id', 'race_class_id']
     for key_name, default_value in defaults.items():
         st.session_state[saved_filter_key(owner_id, key_name)] = default_value
-
     for field_name in selectbox_fields:
         st.session_state[filter_selectbox_key(owner_id, field_name)] = None
-        st.session_state[filter_widget_load_version_key(owner_id, field_name)] = (
-            st.session_state[filter_load_version_key(owner_id)]
-        )
+        st.session_state[filter_widget_load_version_key(owner_id, field_name)] = st.session_state[filter_load_version_key(owner_id)]
+
 
 
 def reset_second_filter_values(owner_id):
     defaults = get_filter_defaults()
-
-    selectbox_fields = [
-        "horse_id",
-        "horse_owner_id",
-        "jockey_id",
-        "previous_jockey_id",
-        "trainer_id",
-        "breeding_farm_id",
-        "stallion_id",
-        "broodmare_sire_id",
-        "previous_venue_id",
-        "race_name_id",
-    ]
-
+    selectbox_fields = ['horse_id', 'horse_owner_id', 'jockey_id', 'previous_jockey_id', 'trainer_id', 'breeding_farm_id', 'stallion_id', 'broodmare_sire_id', 'previous_venue_id', 'race_name_id', 'race_class_id']
     for key_name, default_value in defaults.items():
         st.session_state[second_filter_key(owner_id, key_name)] = default_value
-
     for field_name in selectbox_fields:
-        st.session_state[
-            second_filter_selectbox_key(owner_id, field_name)
-        ] = None
-        st.session_state[
-            second_filter_widget_load_version_key(owner_id, field_name)
-        ] = st.session_state[second_filter_load_version_key(owner_id)]
+        st.session_state[second_filter_selectbox_key(owner_id, field_name)] = None
+        st.session_state[second_filter_widget_load_version_key(owner_id, field_name)] = st.session_state[second_filter_load_version_key(owner_id)]
+
 
 
 def render_filter_selectbox(
@@ -1290,7 +2424,8 @@ def collect_current_filter_data(owner_id):
         return st.session_state.get(saved_filter_key(owner_id, key), default)
     date_from = get_value('date_from')
     date_to = get_value('date_to')
-    return {'horse_id': get_value('horse_id', None), 'horse_owner_id': get_value('horse_owner_id', None), 'jockey_id': get_value('jockey_id', None), 'previous_jockey_id': get_value('previous_jockey_id', None), 'trainer_id': get_value('trainer_id', None), 'breeding_farm_id': get_value('breeding_farm_id', None), 'stallion_id': get_value('stallion_id', None), 'broodmare_sire_id': get_value('broodmare_sire_id', None), 'venue_ids': get_value('venue_ids', []), 'previous_venue_id': get_value('previous_venue_id', None), 'race_name_id': get_value('race_name_id', None), 'memo_keyword': get_value('memo_keyword', ''), 'program_number': get_value('program_number', 0), 'number_of_horses': get_value('number_of_horses', 0), 'odds_from': get_value('odds_from', 0.0), 'odds_to': get_value('odds_to', 999.9), 'prize_from': get_value('prize_from', 0.0), 'prize_to': get_value('prize_to', 1000000000.0), 'criteria_filters': get_value('criteria', []), 'criteria_mode': get_value('criteria_mode', 'AND'), 'distance_from': get_value('distance_from', 0), 'distance_to': get_value('distance_to', 5000), 'previous_distance_from': get_value('previous_distance_from', 0), 'previous_distance_to': get_value('previous_distance_to', 5000), 'interval_days_from': get_value('interval_days_from', 0), 'interval_days_to': get_value('interval_days_to', 9999), 'enable_weight_change_filter': get_value('enable_weight_change_filter', False), 'weight_change_from': get_value('weight_change_from', -999.9), 'weight_change_to': get_value('weight_change_to', 999.9), 'date_from': date_from.isoformat() if isinstance(date_from, date) else None, 'date_to': date_to.isoformat() if isinstance(date_to, date) else None, 'finished_places': get_value('places', []), 'exclude_finished_places': get_value('exclude_places', []), 'enable_bracket_filter': get_value('enable_bracket_filter', False), 'bracket_from': get_value('bracket_from', 1), 'bracket_to': get_value('bracket_to', 8), 'enable_horse_filter': get_value('enable_horse_filter', False), 'horse_from': get_value('horse_from', 1), 'horse_to': get_value('horse_to', 18), 'enable_weight_filter': get_value('enable_weight_filter', False), 'weight_from': get_value('weight_from', 0.0), 'weight_to': get_value('weight_to', 999.9), 'enable_distance_filter': get_value('enable_distance_filter', False), 'enable_previous_distance_filter': get_value('enable_previous_distance_filter', False), 'enable_interval_days_filter': get_value('enable_interval_days_filter', False)}
+    return {'horse_id': get_value('horse_id', None), 'horse_owner_id': get_value('horse_owner_id', None), 'jockey_id': get_value('jockey_id', None), 'previous_jockey_id': get_value('previous_jockey_id', None), 'trainer_id': get_value('trainer_id', None), 'breeding_farm_id': get_value('breeding_farm_id', None), 'stallion_id': get_value('stallion_id', None), 'broodmare_sire_id': get_value('broodmare_sire_id', None), 'venue_ids': get_value('venue_ids', []), 'previous_venue_id': get_value('previous_venue_id', None), 'race_name_id': get_value('race_name_id', None), 'memo_keyword': get_value('memo_keyword', ''), 'program_number': get_value('program_number', 0), 'number_of_horses': get_value('number_of_horses', 0), 'odds_from': get_value('odds_from', 0.0), 'odds_to': get_value('odds_to', 999.9), 'prize_from': get_value('prize_from', 0.0), 'prize_to': get_value('prize_to', 1000000000.0), 'criteria_filters': get_value('criteria', []), 'criteria_mode': get_value('criteria_mode', 'AND'), 'distance_from': get_value('distance_from', 0), 'distance_to': get_value('distance_to', 5000), 'previous_distance_from': get_value('previous_distance_from', 0), 'previous_distance_to': get_value('previous_distance_to', 5000), 'interval_days_from': get_value('interval_days_from', 0), 'interval_days_to': get_value('interval_days_to', 9999), 'enable_weight_change_filter': get_value('enable_weight_change_filter', False), 'weight_change_from': get_value('weight_change_from', -999.9), 'weight_change_to': get_value('weight_change_to', 999.9), 'date_from': date_from.isoformat() if isinstance(date_from, date) else None, 'date_to': date_to.isoformat() if isinstance(date_to, date) else None, 'finished_places': get_value('places', []), 'exclude_finished_places': get_value('exclude_places', []), 'enable_bracket_filter': get_value('enable_bracket_filter', False), 'bracket_from': get_value('bracket_from', 1), 'bracket_to': get_value('bracket_to', 8), 'enable_horse_filter': get_value('enable_horse_filter', False), 'horse_from': get_value('horse_from', 1), 'horse_to': get_value('horse_to', 18), 'enable_weight_filter': get_value('enable_weight_filter', False), 'weight_from': get_value('weight_from', 0.0), 'weight_to': get_value('weight_to', 999.9), 'enable_distance_filter': get_value('enable_distance_filter', False), 'enable_previous_distance_filter': get_value('enable_previous_distance_filter', False), 'enable_interval_days_filter': get_value('enable_interval_days_filter', False), 'race_class_id': get_value('race_class_id', None)}
+
 
 
 
@@ -1352,6 +2487,8 @@ def apply_saved_filter_to_session(owner_id, filter_data, filter_title=''):
     set_value('weight_to', float(filter_data.get('weight_to', 999.9) or 999.9))
     set_value('active_filter_title', clean_text(filter_title))
     st.session_state[filter_load_version_key(owner_id)] += 1
+    set_value('race_class_id', filter_data.get('race_class_id'))
+
 
 
 
@@ -1597,333 +2734,64 @@ def find_template_item_id(template_type, owner_id, value):
 # -------------------------------------------------
 # Checklist database functions
 # -------------------------------------------------
-def add_checklist(
-    owner_id,
-    horse_id,
-    horse_owner_id,
-    jockey_id,
-    previous_jockey_id,
-    trainer_id,
-    breeding_farm_id,
-    stallion_id,
-    broodmare_sire_id,
-    venue_id,
-    previous_venue_id,
-    race_name_id,
-    distance,
-    previous_distance,
-    date_of_race,
-    previous_race_date,
-    weight_change,
-    memo,
-    finished_place,
-    checklist_data,
-    program_number=None,
-    number_of_horses=None,
-    odds=None,
-    prize=None,
-    bracket_number=None,
-    horse_number=None,
-    horse_weight=None,
-):
+def add_checklist(owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, date_of_race, previous_race_date, weight_change, memo, finished_place, checklist_data, program_number=None, number_of_horses=None, odds=None, prize=None, bracket_number=None, horse_number=None, horse_weight=None, *, race_class_id=_RF_UNSET):
+    race_class_id = _rf_resolve_class(owner_id, None, race_class_id)
     conn = get_db_connection()
     cursor = conn.cursor()
-
     try:
         normalized_date_of_race = normalize_date(date_of_race)
         normalized_previous_race_date = normalize_date(previous_race_date)
-
         if not normalized_date_of_race:
-            return False, "Date of race is required."
-
-        if (
-            normalized_previous_race_date
-            and calculate_interval_days(
-                normalized_date_of_race,
-                normalized_previous_race_date,
-            )
-            is None
-        ):
-            return (
-                False,
-                "Previous race date cannot be after the current race date.",
-            )
-
+            return (False, 'Date of race is required.')
+        if normalized_previous_race_date and calculate_interval_days(normalized_date_of_race, normalized_previous_race_date) is None:
+            return (False, 'Previous race date cannot be after the current race date.')
         if horse_id is not None:
-            cursor.execute(
-                """
-                SELECT id
-                FROM checklists
-                WHERE owner_id = ? AND horse_id = ? AND date_of_race = ?
-                """,
-                (owner_id, horse_id, normalized_date_of_race),
-            )
-
+            cursor.execute('\n                SELECT id\n                FROM checklists\n                WHERE owner_id = ? AND horse_id = ? AND date_of_race = ?\n                ', (owner_id, horse_id, normalized_date_of_race))
             if cursor.fetchone():
-                return (
-                    False,
-                    "A checklist for this horse and race date is already registered.",
-                )
-
-        interval_days = calculate_interval_days(
-            normalized_date_of_race,
-            normalized_previous_race_date,
-        )
-
-        checklist_json = (
-            json.dumps(checklist_data, ensure_ascii=False)
-            if checklist_data
-            else None
-        )
-
-        cursor.execute(
-            """
-            INSERT INTO checklists (
-                owner_id,
-                horse_id,
-                horse_owner_id,
-                jockey_id,
-                previous_jockey_id,
-                trainer_id,
-                breeding_farm_id,
-                stallion_id,
-                broodmare_sire_id,
-                venue_id,
-                previous_venue_id,
-                race_name_id,
-                distance,
-                previous_distance,
-                date_of_race,
-                previous_race_date,
-                interval_days,
-                weight_change,
-                memo,
-                finished_place,
-                checklist,
-                program_number,
-                number_of_horses,
-                odds,
-                prize,
-                bracket_number,
-                horse_number,
-                horse_weight
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                owner_id,
-                horse_id,
-                horse_owner_id,
-                jockey_id,
-                previous_jockey_id,
-                trainer_id,
-                breeding_farm_id,
-                stallion_id,
-                broodmare_sire_id,
-                venue_id,
-                previous_venue_id,
-                race_name_id,
-                distance,
-                previous_distance,
-                normalized_date_of_race,
-                normalized_previous_race_date,
-                interval_days,
-                weight_change,
-                memo,
-                finished_place,
-                checklist_json,
-                program_number,
-                number_of_horses,
-                odds,
-                prize,
-                bracket_number,
-                horse_number,
-                horse_weight,
-            ),
-        )
-
+                return (False, 'A checklist for this horse and race date is already registered.')
+        interval_days = calculate_interval_days(normalized_date_of_race, normalized_previous_race_date)
+        checklist_json = json.dumps(checklist_data, ensure_ascii=False) if checklist_data else None
+        cursor.execute('\n            INSERT INTO checklists (\n                owner_id,\n                horse_id,\n                horse_owner_id,\n                jockey_id,\n                previous_jockey_id,\n                trainer_id,\n                breeding_farm_id,\n                stallion_id,\n                broodmare_sire_id,\n                venue_id,\n                previous_venue_id,\n                race_name_id,\n                distance,\n                previous_distance,\n                date_of_race,\n                previous_race_date,\n                interval_days,\n                weight_change,\n                memo,\n                finished_place,\n                checklist,\n                program_number,\n                number_of_horses,\n                odds,\n                prize,\n                bracket_number,\n                horse_number,\n                horse_weight, race_class_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n            ', (owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, normalized_date_of_race, normalized_previous_race_date, interval_days, weight_change, memo, finished_place, checklist_json, program_number, number_of_horses, odds, prize, bracket_number, horse_number, horse_weight, race_class_id))
         conn.commit()
-        return True, "Checklist saved!"
-
+        return (True, 'Checklist saved!')
     except sqlite3.IntegrityError:
-        return (
-            False,
-            "A checklist for this horse and race date is already registered.",
-        )
+        return (False, 'A checklist for this horse and race date is already registered.')
     except sqlite3.Error as error:
         conn.rollback()
-        return False, f"Database error: {error}"
+        return (False, f'Database error: {error}')
     finally:
         conn.close()
 
 
-def update_checklist(
-    checklist_id,
-    owner_id,
-    horse_id,
-    horse_owner_id,
-    jockey_id,
-    previous_jockey_id,
-    trainer_id,
-    breeding_farm_id,
-    stallion_id,
-    broodmare_sire_id,
-    venue_id,
-    previous_venue_id,
-    race_name_id,
-    distance,
-    previous_distance,
-    date_of_race,
-    previous_race_date,
-    weight_change,
-    memo,
-    finished_place,
-    program_number,
-    number_of_horses,
-    odds,
-    prize,
-    checklist_data,
-    bracket_number=None,
-    horse_number=None,
-    horse_weight=None,
-):
+
+def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, date_of_race, previous_race_date, weight_change, memo, finished_place, program_number, number_of_horses, odds, prize, checklist_data, bracket_number=None, horse_number=None, horse_weight=None, *, race_class_id=_RF_UNSET):
+    race_class_id = _rf_resolve_class(owner_id, checklist_id, race_class_id)
     conn = get_db_connection()
     cursor = conn.cursor()
-
     try:
         normalized_date_of_race = normalize_date(date_of_race)
         normalized_previous_race_date = normalize_date(previous_race_date)
-
         if not normalized_date_of_race:
-            return False, "Date of race is required."
-
-        if (
-            normalized_previous_race_date
-            and calculate_interval_days(
-                normalized_date_of_race,
-                normalized_previous_race_date,
-            )
-            is None
-        ):
-            return (
-                False,
-                "Previous race date cannot be after the current race date.",
-            )
-
+            return (False, 'Date of race is required.')
+        if normalized_previous_race_date and calculate_interval_days(normalized_date_of_race, normalized_previous_race_date) is None:
+            return (False, 'Previous race date cannot be after the current race date.')
         if horse_id is not None:
-            cursor.execute(
-                """
-                SELECT id
-                FROM checklists
-                WHERE owner_id = ?
-                  AND horse_id = ?
-                  AND date_of_race = ?
-                  AND id != ?
-                """,
-                (
-                    owner_id,
-                    horse_id,
-                    normalized_date_of_race,
-                    checklist_id,
-                ),
-            )
-
+            cursor.execute('\n                SELECT id\n                FROM checklists\n                WHERE owner_id = ?\n                  AND horse_id = ?\n                  AND date_of_race = ?\n                  AND id != ?\n                ', (owner_id, horse_id, normalized_date_of_race, checklist_id))
             if cursor.fetchone():
-                return (
-                    False,
-                    "Another checklist for this horse and race date is already registered.",
-                )
-
-        interval_days = calculate_interval_days(
-            normalized_date_of_race,
-            normalized_previous_race_date,
-        )
-
-        checklist_json = (
-            json.dumps(checklist_data, ensure_ascii=False)
-            if checklist_data
-            else None
-        )
-
-        cursor.execute(
-            """
-            UPDATE checklists
-            SET
-                horse_id = ?,
-                horse_owner_id = ?,
-                jockey_id = ?,
-                previous_jockey_id = ?,
-                trainer_id = ?,
-                breeding_farm_id = ?,
-                stallion_id = ?,
-                broodmare_sire_id = ?,
-                venue_id = ?,
-                previous_venue_id = ?,
-                race_name_id = ?,
-                distance = ?,
-                previous_distance = ?,
-                date_of_race = ?,
-                previous_race_date = ?,
-                interval_days = ?,
-                weight_change = ?,
-                memo = ?,
-                finished_place = ?,
-                checklist = ?,
-                program_number = ?,
-                number_of_horses = ?,
-                odds = ?,
-                prize = ?,
-                bracket_number = ?,
-                horse_number = ?,
-                horse_weight = ?
-            WHERE id = ? AND owner_id = ?
-            """,
-            (
-                horse_id,
-                horse_owner_id,
-                jockey_id,
-                previous_jockey_id,
-                trainer_id,
-                breeding_farm_id,
-                stallion_id,
-                broodmare_sire_id,
-                venue_id,
-                previous_venue_id,
-                race_name_id,
-                distance,
-                previous_distance,
-                normalized_date_of_race,
-                normalized_previous_race_date,
-                interval_days,
-                weight_change,
-                memo,
-                finished_place,
-                checklist_json,
-                program_number,
-                number_of_horses,
-                odds,
-                prize,
-                bracket_number,
-                horse_number,
-                horse_weight,
-                checklist_id,
-                owner_id,
-            ),
-        )
-
+                return (False, 'Another checklist for this horse and race date is already registered.')
+        interval_days = calculate_interval_days(normalized_date_of_race, normalized_previous_race_date)
+        checklist_json = json.dumps(checklist_data, ensure_ascii=False) if checklist_data else None
+        cursor.execute('\n            UPDATE checklists\n            SET\n                horse_id = ?,\n                horse_owner_id = ?,\n                jockey_id = ?,\n                previous_jockey_id = ?,\n                trainer_id = ?,\n                breeding_farm_id = ?,\n                stallion_id = ?,\n                broodmare_sire_id = ?,\n                venue_id = ?,\n                previous_venue_id = ?,\n                race_name_id = ?,\n                distance = ?,\n                previous_distance = ?,\n                date_of_race = ?,\n                previous_race_date = ?,\n                interval_days = ?,\n                weight_change = ?,\n                memo = ?,\n                finished_place = ?,\n                checklist = ?,\n                program_number = ?,\n                number_of_horses = ?,\n                odds = ?,\n                prize = ?,\n                bracket_number = ?,\n                horse_number = ?,\n                horse_weight = ?, race_class_id=? WHERE id = ? AND owner_id = ?\n            ', (horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, normalized_date_of_race, normalized_previous_race_date, interval_days, weight_change, memo, finished_place, checklist_json, program_number, number_of_horses, odds, prize, bracket_number, horse_number, horse_weight, race_class_id, checklist_id, owner_id))
         conn.commit()
-        return True, "Checklist updated!"
-
+        return (True, 'Checklist updated!')
     except sqlite3.IntegrityError:
-        return (
-            False,
-            "Another checklist for this horse and race date is already registered.",
-        )
+        return (False, 'Another checklist for this horse and race date is already registered.')
     except sqlite3.Error as error:
         conn.rollback()
-        return False, f"Database error: {error}"
+        return (False, f'Database error: {error}')
     finally:
         conn.close()
+
 
 
 def delete_checklist(checklist_id, owner_id):
@@ -1992,143 +2860,20 @@ def find_checklist_id_by_horse_and_date(owner_id, horse_id, date_of_race):
         conn.close()
 
 
+@_rf_enrich
 def get_user_checklists(owner_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-
     try:
-        cursor.execute(
-            """
-            SELECT
-                checklists.id,
-                checklists.horse_id,
-                horses.horse_name,
-                checklists.horse_owner_id,
-                horse_owners.horse_owner_name,
-                checklists.jockey_id,
-                jockeys.jockey_name,
-                checklists.previous_jockey_id,
-                prev_jockey.jockey_name AS previous_jockey_name,
-                checklists.trainer_id,
-                trainers.trainer_name,
-                checklists.breeding_farm_id,
-                breeding_farms.breeding_farm_name,
-                checklists.stallion_id,
-                stallions.stallion_name,
-                checklists.broodmare_sire_id,
-                broodmare_sires.stallion_name AS broodmare_sire_name,
-                checklists.venue_id,
-                venues.venue_name,
-                checklists.previous_venue_id,
-                previous_venues.venue_name AS previous_venue_name,
-                checklists.race_name_id,
-                race_names.race_name,
-                checklists.distance,
-                checklists.previous_distance,
-                checklists.date_of_race,
-                checklists.previous_race_date,
-                checklists.interval_days,
-                checklists.weight_change,
-                checklists.memo,
-                checklists.finished_place,
-                checklists.checklist,
-                checklists.program_number,
-                checklists.number_of_horses,
-                checklists.odds,
-                checklists.prize,
-                checklists.bracket_number,
-                checklists.horse_number,
-                checklists.horse_weight
-            FROM checklists
-            LEFT JOIN horses ON checklists.horse_id = horses.id
-            LEFT JOIN horse_owners
-                ON checklists.horse_owner_id = horse_owners.id
-            LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id
-            LEFT JOIN jockeys AS prev_jockey
-                ON checklists.previous_jockey_id = prev_jockey.id
-            LEFT JOIN trainers ON checklists.trainer_id = trainers.id
-            LEFT JOIN breeding_farms
-                ON checklists.breeding_farm_id = breeding_farms.id
-            LEFT JOIN stallions ON checklists.stallion_id = stallions.id
-            LEFT JOIN stallions AS broodmare_sires
-                ON checklists.broodmare_sire_id = broodmare_sires.id
-            LEFT JOIN venues ON checklists.venue_id = venues.id
-            LEFT JOIN venues AS previous_venues
-                ON checklists.previous_venue_id = previous_venues.id
-            LEFT JOIN race_names ON checklists.race_name_id = race_names.id
-            WHERE checklists.owner_id = ?
-            ORDER BY checklists.date_of_race DESC, checklists.id DESC
-            """,
-            (owner_id,),
-        )
-
+        cursor.execute('\n            SELECT\n                checklists.id,\n                checklists.horse_id,\n                horses.horse_name,\n                checklists.horse_owner_id,\n                horse_owners.horse_owner_name,\n                checklists.jockey_id,\n                jockeys.jockey_name,\n                checklists.previous_jockey_id,\n                prev_jockey.jockey_name AS previous_jockey_name,\n                checklists.trainer_id,\n                trainers.trainer_name,\n                checklists.breeding_farm_id,\n                breeding_farms.breeding_farm_name,\n                checklists.stallion_id,\n                stallions.stallion_name,\n                checklists.broodmare_sire_id,\n                broodmare_sires.stallion_name AS broodmare_sire_name,\n                checklists.venue_id,\n                venues.venue_name,\n                checklists.previous_venue_id,\n                previous_venues.venue_name AS previous_venue_name,\n                checklists.race_name_id,\n                race_names.race_name,\n                checklists.distance,\n                checklists.previous_distance,\n                checklists.date_of_race,\n                checklists.previous_race_date,\n                checklists.interval_days,\n                checklists.weight_change,\n                checklists.memo,\n                checklists.finished_place,\n                checklists.checklist,\n                checklists.program_number,\n                checklists.number_of_horses,\n                checklists.odds,\n                checklists.prize,\n                checklists.bracket_number,\n                checklists.horse_number,\n                checklists.horse_weight\n            FROM checklists\n            LEFT JOIN horses ON checklists.horse_id = horses.id\n            LEFT JOIN horse_owners\n                ON checklists.horse_owner_id = horse_owners.id\n            LEFT JOIN jockeys ON checklists.jockey_id = jockeys.id\n            LEFT JOIN jockeys AS prev_jockey\n                ON checklists.previous_jockey_id = prev_jockey.id\n            LEFT JOIN trainers ON checklists.trainer_id = trainers.id\n            LEFT JOIN breeding_farms\n                ON checklists.breeding_farm_id = breeding_farms.id\n            LEFT JOIN stallions ON checklists.stallion_id = stallions.id\n            LEFT JOIN stallions AS broodmare_sires\n                ON checklists.broodmare_sire_id = broodmare_sires.id\n            LEFT JOIN venues ON checklists.venue_id = venues.id\n            LEFT JOIN venues AS previous_venues\n                ON checklists.previous_venue_id = previous_venues.id\n            LEFT JOIN race_names ON checklists.race_name_id = race_names.id\n            WHERE checklists.owner_id = ?\n            ORDER BY checklists.date_of_race DESC, checklists.id DESC\n            ', (owner_id,))
         results = cursor.fetchall()
-
         checklists = []
         for row in results:
-            checklists.append(
-                {
-                    "id": row["id"],
-                    "horse_id": row["horse_id"],
-                    "horse_name": row["horse_name"] or "No horse selected",
-                    "horse_owner_id": row["horse_owner_id"],
-                    "horse_owner_name": (
-                        row["horse_owner_name"]
-                        or "No horse owner selected"
-                    ),
-                    "jockey_id": row["jockey_id"],
-                    "jockey_name": row["jockey_name"] or "No jockey selected",
-                    "previous_jockey_id": row["previous_jockey_id"],
-                    "previous_jockey_name": (
-                        row["previous_jockey_name"]
-                        or "No previous jockey selected"
-                    ),
-                    "trainer_id": row["trainer_id"],
-                    "trainer_name": row["trainer_name"] or "No trainer selected",
-                    "breeding_farm_id": row["breeding_farm_id"],
-                    "breeding_farm_name": (
-                        row["breeding_farm_name"]
-                        or "No breeding farm selected"
-                    ),
-                    "stallion_id": row["stallion_id"],
-                    "stallion_name": row["stallion_name"] or "No stallion selected",
-                    "broodmare_sire_id": row["broodmare_sire_id"],
-                    "broodmare_sire_name": (
-                        row["broodmare_sire_name"]
-                        or "No broodmare sire selected"
-                    ),
-                    "venue_id": row["venue_id"],
-                    "venue_name": row["venue_name"] or "No venue selected",
-                    "previous_venue_id": row["previous_venue_id"],
-                    "previous_venue_name": (
-                        row["previous_venue_name"]
-                        or "No previous venue selected"
-                    ),
-                    "race_name_id": row["race_name_id"],
-                    "race_name": row["race_name"] or "No race name selected",
-                    "distance": row["distance"],
-                    "previous_distance": row["previous_distance"],
-                    "date_of_race": row["date_of_race"],
-                    "previous_race_date": row["previous_race_date"],
-                    "interval_days": row["interval_days"],
-                    "weight_change": row["weight_change"],
-                    "memo": row["memo"] or "",
-                    "finished_place": row["finished_place"] or "",
-                    "checklist": safe_json_loads(row["checklist"]),
-                    "program_number": row["program_number"],
-                    "number_of_horses": row["number_of_horses"],
-                    "odds": row["odds"],
-                    "prize": row["prize"],
-                    "bracket_number": row["bracket_number"],
-                    "horse_number": row["horse_number"],
-                    "horse_weight": row["horse_weight"],
-                }
-            )
-
+            checklists.append({'id': row['id'], 'horse_id': row['horse_id'], 'horse_name': row['horse_name'] or 'No horse selected', 'horse_owner_id': row['horse_owner_id'], 'horse_owner_name': row['horse_owner_name'] or 'No horse owner selected', 'jockey_id': row['jockey_id'], 'jockey_name': row['jockey_name'] or 'No jockey selected', 'previous_jockey_id': row['previous_jockey_id'], 'previous_jockey_name': row['previous_jockey_name'] or 'No previous jockey selected', 'trainer_id': row['trainer_id'], 'trainer_name': row['trainer_name'] or 'No trainer selected', 'breeding_farm_id': row['breeding_farm_id'], 'breeding_farm_name': row['breeding_farm_name'] or 'No breeding farm selected', 'stallion_id': row['stallion_id'], 'stallion_name': row['stallion_name'] or 'No stallion selected', 'broodmare_sire_id': row['broodmare_sire_id'], 'broodmare_sire_name': row['broodmare_sire_name'] or 'No broodmare sire selected', 'venue_id': row['venue_id'], 'venue_name': row['venue_name'] or 'No venue selected', 'previous_venue_id': row['previous_venue_id'], 'previous_venue_name': row['previous_venue_name'] or 'No previous venue selected', 'race_name_id': row['race_name_id'], 'race_name': row['race_name'] or 'No race name selected', 'distance': row['distance'], 'previous_distance': row['previous_distance'], 'date_of_race': row['date_of_race'], 'previous_race_date': row['previous_race_date'], 'interval_days': row['interval_days'], 'weight_change': row['weight_change'], 'memo': row['memo'] or '', 'finished_place': row['finished_place'] or '', 'checklist': safe_json_loads(row['checklist']), 'program_number': row['program_number'], 'number_of_horses': row['number_of_horses'], 'odds': row['odds'], 'prize': row['prize'], 'bracket_number': row['bracket_number'], 'horse_number': row['horse_number'], 'horse_weight': row['horse_weight']})
         return checklists
-
     finally:
         conn.close()
+
 
 
 # -------------------------------------------------
@@ -2587,58 +3332,18 @@ def render_template_page(template_type, title, input_label):
 # RACE_CHECKLIST_ACCEPT_NEW_REFERENCE_NAMES_V1
 def render_race_reference_input(label, existing_options, key):
     import inspect
-
-    # make_options() puts "(No selection)" at index zero.
-    names = [
-        clean_text(value)
-        for value in existing_options[1:]
-        if clean_text(value)
-    ]
-
+    names = [clean_text(value) for value in existing_options[1:] if clean_text(value)]
     try:
-        supports_new_options = (
-            "accept_new_options"
-            in inspect.signature(st.selectbox).parameters
-        )
+        supports_new_options = 'accept_new_options' in inspect.signature(st.selectbox).parameters
     except (TypeError, ValueError):
         supports_new_options = False
-
     if supports_new_options:
-        selected_name = st.selectbox(
-            label,
-            options=names,
-            index=None,
-            key=key,
-            accept_new_options=True,
-            placeholder="Select a registered name or type a new name",
-            help=(
-                "Registered names remain available as suggestions. "
-                "A new name is registered when you save the checklist."
-            ),
-        )
-
+        selected_name = st.selectbox(label, options=names, index=None, key=key, accept_new_options=True, placeholder='Select a registered name or type a new name', help='Registered names remain available as suggestions. A new name is registered when you save the checklist.')
         return clean_text(selected_name)
-
-    selected_name = st.selectbox(
-        label,
-        options=[None] + names,
-        index=0,
-        format_func=lambda value: (
-            value if value is not None else "(No selection)"
-        ),
-        key=key,
-    )
-
-    new_name = st.text_input(
-        f"New name for {label}",
-        key=f"{key}_new_name",
-        help=(
-            "Optional. Enter a name that is not listed above. "
-            "If entered, this name takes priority over the selected name."
-        ),
-    )
-
+    selected_name = st.selectbox(label, options=[None] + names, index=None if key in st.session_state else 0, format_func=lambda value: value if value is not None else '(No selection)', key=key)
+    new_name = st.text_input(f'New name for {label}', key=f'{key}_new_name', help='Optional. Enter a name that is not listed above. If entered, this name takes priority over the selected name.')
     return clean_text(new_name) or clean_text(selected_name)
+
 
 
 def resolve_race_reference_input(template_type, owner_id, value):
@@ -2690,6 +3395,7 @@ def render_race_checklist_page():
     stallion_options, stallion_ids = make_options(stallions, 'stallion_name')
     venue_options, venue_ids = make_options(venues, 'venue_name')
     race_options, race_ids = make_options(race_names, 'race_name')
+    _rf_loader(owner_id, 'registration', {'selected_race_idx': registration_key('selected_race_idx') + '_accept_name', 'distance': registration_key('distance'), 'date_of_race': registration_key('date_of_race'), 'program_number': registration_key('program_number'), 'number_of_horses': registration_key('number_of_horses'), 'race_class_id': registration_key('race_class_id'), 'selected_venue_idx': registration_key('selected_venue_idx') + '_accept_name'})
     with st.container():
         selected_horse_idx = render_race_reference_input('Select Horse (optional)', horse_options, key=registration_key('selected_horse_idx') + '_accept_name')
         selected_horse_owner_idx = render_race_reference_input('Select Horse Owner (optional)', horse_owner_options, key=registration_key('selected_horse_owner_idx') + '_accept_name')
@@ -2702,9 +3408,10 @@ def render_race_checklist_page():
         selected_venue_idx = render_race_reference_input('Select Venue (optional)', venue_options, key=registration_key('selected_venue_idx') + '_accept_name')
         selected_previous_venue_idx = render_race_reference_input('Select Previous Venue (optional)', venue_options, key=registration_key('selected_previous_venue_idx') + '_accept_name')
         selected_race_idx = render_race_reference_input('Select Race Name (optional)', race_options, key=registration_key('selected_race_idx') + '_accept_name')
-        distance = st.number_input('Distance (meters)', min_value=0, max_value=5000, value=0, step=100, key=registration_key('distance'))
+        rf_registration_class_id = _rf_class_select(owner_id, registration_key('race_class_id'))
+        distance = _rf_seeded_widget(st.number_input, 'Distance (meters)', min_value=0, max_value=5000, value=0, step=100, key=registration_key('distance'))
         previous_distance = st.number_input('Previous Distance (meters) (optional)', min_value=0, max_value=5000, value=0, step=100, key=registration_key('previous_distance'))
-        date_of_race = st.date_input('Date of Race', min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), value=date.today(), key=registration_key('date_of_race'))
+        date_of_race = _rf_seeded_widget(st.date_input, 'Date of Race', min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), value=date.today(), key=registration_key('date_of_race'))
         previous_race_date = st.date_input('Previous Race Date (optional)', min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), value=None, key=registration_key('previous_race_date'))
         interval_days_preview = calculate_interval_days(date_of_race, previous_race_date)
         if date_of_race is None:
@@ -2720,8 +3427,8 @@ def render_race_checklist_page():
         finished_place = st.text_input('Finished Place (optional)', key=registration_key('finished_place'))
         col1, col2 = st.columns(2)
         with col1:
-            program_number = st.number_input('Program Number (optional) (レース番号)', min_value=0, max_value=12, value=0, key=registration_key('program_number'))
-            number_of_horses = st.number_input('Number of Horses (optional) (出走頭数)', min_value=0, max_value=18, value=0, key=registration_key('number_of_horses'))
+            program_number = _rf_seeded_widget(st.number_input, 'Program Number (optional) (レース番号)', min_value=0, max_value=12, value=0, key=registration_key('program_number'))
+            number_of_horses = _rf_seeded_widget(st.number_input, 'Number of Horses (optional) (出走頭数)', min_value=0, max_value=18, value=0, key=registration_key('number_of_horses'))
             odds = st.number_input('Odds (optional)', min_value=0.0, max_value=999.9, value=0.0, step=0.1, key=registration_key('odds'))
             prize = st.number_input('Prize (optional) (¥)', min_value=0.0, max_value=1000000000.0, value=0.0, step=1000.0, key=registration_key('prize'))
         with col2:
@@ -2744,7 +3451,7 @@ def render_race_checklist_page():
                 st.error('Date of race is required.')
                 return
             try:
-                success, message = add_checklist(owner_id=owner_id, horse_id=resolve_race_reference_input('horse', owner_id, selected_horse_idx), horse_owner_id=resolve_race_reference_input('horse_owner', owner_id, selected_horse_owner_idx), jockey_id=resolve_race_reference_input('jockey', owner_id, selected_jockey_idx), previous_jockey_id=resolve_race_reference_input('jockey', owner_id, selected_previous_jockey_idx), trainer_id=resolve_race_reference_input('trainer', owner_id, selected_trainer_idx), breeding_farm_id=resolve_race_reference_input('breeding_farm', owner_id, selected_breeding_farm_idx), stallion_id=resolve_race_reference_input('stallion', owner_id, selected_stallion_idx), broodmare_sire_id=resolve_race_reference_input('stallion', owner_id, selected_broodmare_sire_idx), venue_id=resolve_race_reference_input('venue', owner_id, selected_venue_idx), previous_venue_id=resolve_race_reference_input('venue', owner_id, selected_previous_venue_idx), race_name_id=resolve_race_reference_input('race_name', owner_id, selected_race_idx), distance=to_optional_int(distance), previous_distance=to_optional_int(previous_distance), date_of_race=normalized_date_of_race, previous_race_date=normalized_previous_race_date, weight_change=to_optional_signed_float(weight_change), memo=clean_text(memo), finished_place=clean_text(finished_place), checklist_data=checklist_data if any(checklist_data.values()) else None, program_number=to_optional_int(program_number), number_of_horses=to_optional_int(number_of_horses), odds=to_optional_float(odds), prize=to_optional_float(prize), bracket_number=to_optional_int(bracket_number), horse_number=to_optional_int(horse_number), horse_weight=to_optional_float(horse_weight))
+                success, message = add_checklist(owner_id=owner_id, horse_id=resolve_race_reference_input('horse', owner_id, selected_horse_idx), horse_owner_id=resolve_race_reference_input('horse_owner', owner_id, selected_horse_owner_idx), jockey_id=resolve_race_reference_input('jockey', owner_id, selected_jockey_idx), previous_jockey_id=resolve_race_reference_input('jockey', owner_id, selected_previous_jockey_idx), trainer_id=resolve_race_reference_input('trainer', owner_id, selected_trainer_idx), breeding_farm_id=resolve_race_reference_input('breeding_farm', owner_id, selected_breeding_farm_idx), stallion_id=resolve_race_reference_input('stallion', owner_id, selected_stallion_idx), broodmare_sire_id=resolve_race_reference_input('stallion', owner_id, selected_broodmare_sire_idx), venue_id=resolve_race_reference_input('venue', owner_id, selected_venue_idx), previous_venue_id=resolve_race_reference_input('venue', owner_id, selected_previous_venue_idx), race_name_id=resolve_race_reference_input('race_name', owner_id, selected_race_idx), distance=to_optional_int(distance), previous_distance=to_optional_int(previous_distance), date_of_race=normalized_date_of_race, previous_race_date=normalized_previous_race_date, weight_change=to_optional_signed_float(weight_change), memo=clean_text(memo), finished_place=clean_text(finished_place), checklist_data=checklist_data if any(checklist_data.values()) else None, program_number=to_optional_int(program_number), number_of_horses=to_optional_int(number_of_horses), odds=to_optional_float(odds), prize=to_optional_float(prize), bracket_number=to_optional_int(bracket_number), horse_number=to_optional_int(horse_number), horse_weight=to_optional_float(horse_weight), race_class_id=rf_registration_class_id)
             except ValueError as reference_error:
                 st.error(str(reference_error))
                 return
@@ -2755,6 +3462,8 @@ def render_race_checklist_page():
             else:
                 st.error(message)
     render_batch_import_section(owner_id, criteria)
+
+
 
 
 
@@ -3194,12 +3903,15 @@ def _review_arrow_safe_summary(dataframe):
     return dataframe
 
 # REVIEW_TABLE_TALLER_AND_REFERENCE_COLUMNS_V1
+# REVIEW_MATCHED_TABLE_MEMO_V1
 def build_summary_dataframe(checklists):
     summary_rows = []
     for entry in checklists:
         checked_criteria = [key for key, value in (entry.get('checklist') or {}).items() if value]
-        summary_rows.append({'ID': entry['id'], 'Date': entry.get('date_of_race') or '', 'Previous Race Date': entry.get('previous_race_date') or '', 'Days Since Last Race': entry.get('interval_days') if entry.get('interval_days') is not None else '', 'Horse': entry.get('horse_name') or '', 'Horse Owner': entry.get('horse_owner_name') or '', 'Jockey': entry.get('jockey_name') or '', 'Trainer': entry.get('trainer_name') or '', 'Breeding Farm': entry.get('breeding_farm_name') or '', 'Stallion': entry.get('stallion_name') or '', 'Race': entry.get('race_name') or '', 'Venue': entry.get('venue_name') or '', 'Previous Venue': entry.get('previous_venue_name') or '', 'Distance': entry.get('distance') or '', 'Previous Distance': entry.get('previous_distance') or '', 'Weight Change (kg)': format_signed_number(entry.get('weight_change')), 'Horse Weight (kg)': entry.get('horse_weight') or '', 'Place': entry.get('finished_place') or '', 'Odds': entry.get('odds') if entry.get('odds') is not None else '', 'Prize (¥)': f"¥{entry.get('prize'):,.0f}" if entry.get('prize') is not None else '', 'Criteria': ' | '.join(checked_criteria)})
+        summary_rows.append({'ID': entry['id'], 'Date': entry.get('date_of_race') or '', 'Previous Race Date': entry.get('previous_race_date') or '', 'Days Since Last Race': entry.get('interval_days') if entry.get('interval_days') is not None else '', 'Horse': entry.get('horse_name') or '', 'Memo': '' if entry.get('memo') is None else str(entry.get('memo')), 'Horse Owner': entry.get('horse_owner_name') or '', 'Jockey': entry.get('jockey_name') or '', 'Trainer': entry.get('trainer_name') or '', 'Breeding Farm': entry.get('breeding_farm_name') or '', 'Stallion': entry.get('stallion_name') or '', 'Race': entry.get('race_name') or '', 'Venue': entry.get('venue_name') or '', 'Previous Venue': entry.get('previous_venue_name') or '', 'Distance': entry.get('distance') or '', 'Previous Distance': entry.get('previous_distance') or '', 'Weight Change (kg)': format_signed_number(entry.get('weight_change')), 'Horse Weight (kg)': entry.get('horse_weight') or '', 'Place': entry.get('finished_place') or '', 'Odds': entry.get('odds') if entry.get('odds') is not None else '', 'Prize (¥)': f"¥{entry.get('prize'):,.0f}" if entry.get('prize') is not None else '', 'Criteria': ' | '.join(checked_criteria), 'Race Class': entry.get('race_class_name') or ''})
     return _review_arrow_safe_summary(pd.DataFrame(summary_rows))
+
+
 
 
 
@@ -3395,6 +4107,7 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
         return ids.index(entry_id) if entry_id in ids else 0
     existing_date = parse_race_date(entry.get('date_of_race')) or date.today()
     existing_previous_race_date = parse_race_date(entry.get('previous_race_date'))
+    _rf_venue_editor_loader(owner_id, entry)
     with st.form(f"edit_checklist_form_{entry['id']}"):
         edit_horse_idx = st.selectbox('Horse', range(len(horse_options)), index=selected_index(horse_ids, entry.get('horse_id')), format_func=lambda i: horse_options[i])
         edit_horse_owner_idx = st.selectbox('Horse Owner', range(len(horse_owner_options)), index=selected_index(horse_owner_ids, entry.get('horse_owner_id')), format_func=lambda i: horse_owner_options[i])
@@ -3404,12 +4117,13 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
         edit_breeding_farm_idx = st.selectbox('Breeding Farm', range(len(breeding_farm_options)), index=selected_index(breeding_farm_ids, entry.get('breeding_farm_id')), format_func=lambda i: breeding_farm_options[i])
         edit_stallion_idx = st.selectbox('Stallion', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('stallion_id')), format_func=lambda i: stallion_options[i])
         edit_broodmare_sire_idx = st.selectbox('Broodmare Sire', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('broodmare_sire_id')), format_func=lambda i: stallion_options[i])
-        edit_venue_idx = st.selectbox('Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('venue_id')), format_func=lambda i: venue_options[i])
+        edit_venue_idx = _rf_venue_editor_widget(st.selectbox, 'Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('venue_id')), format_func=lambda i: venue_options[i], key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_venue_idx'))
         edit_previous_venue_idx = st.selectbox('Previous Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('previous_venue_id')), format_func=lambda i: venue_options[i])
-        edit_race_idx = st.selectbox('Race Name', range(len(race_options)), index=selected_index(race_ids, entry.get('race_name_id')), format_func=lambda i: race_options[i])
-        edit_distance = st.number_input('Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('distance') or 0), step=100)
+        edit_race_idx = _rf_venue_editor_widget(st.selectbox, 'Race Name', range(len(race_options)), index=selected_index(race_ids, entry.get('race_name_id')), format_func=lambda i: race_options[i], key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_race_idx'))
+        rf_editor_class_id = _rf_class_select(owner_id, f"rf_editor_class_{owner_id}_{entry['id']}", entry.get('race_class_id'))
+        edit_distance = _rf_venue_editor_widget(st.number_input, 'Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('distance') or 0), step=100, key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_distance'))
         edit_previous_distance = st.number_input('Previous Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('previous_distance') or 0), step=100)
-        edit_date = st.date_input('Date of Race', value=existing_date)
+        edit_date = _rf_venue_editor_widget(st.date_input, 'Date of Race', value=existing_date, key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_date'))
         edit_previous_race_date = st.date_input('Previous Race Date (optional)', min_value=date(1980, 1, 1), max_value=edit_date, value=existing_previous_race_date)
         edit_interval_days_preview = calculate_interval_days(edit_date, edit_previous_race_date)
         if edit_interval_days_preview is None:
@@ -3421,8 +4135,8 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
         edit_finished_place = st.text_input('Finished Place', value=entry.get('finished_place') or '')
         col1, col2 = st.columns(2)
         with col1:
-            edit_program_number = st.number_input('Program Number (レース番号)', min_value=0, max_value=12, value=int(entry.get('program_number') or 0))
-            edit_number_of_horses = st.number_input('Number of Horses (出走頭数)', min_value=0, max_value=18, value=int(entry.get('number_of_horses') or 0))
+            edit_program_number = _rf_venue_editor_widget(st.number_input, 'Program Number (レース番号)', min_value=0, max_value=12, value=int(entry.get('program_number') or 0), key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_program_number'))
+            edit_number_of_horses = _rf_venue_editor_widget(st.number_input, 'Number of Horses (出走頭数)', min_value=0, max_value=18, value=int(entry.get('number_of_horses') or 0), key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_number_of_horses'))
             edit_odds = st.number_input('Odds', min_value=0.0, max_value=999.9, value=float(entry.get('odds') or 0.0), step=0.1)
             edit_prize = st.number_input('Prize (¥)', min_value=0.0, max_value=1000000000.0, value=float(entry.get('prize') or 0.0), step=1000.0)
         with col2:
@@ -3445,7 +4159,7 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
             st.error('Previous race date cannot be after the current race date.')
             return
         _review_update_filter_snapshot = _capture_review_update_filter_state(owner_id)
-        success, message = update_checklist(checklist_id=entry['id'], owner_id=owner_id, horse_id=get_selected_id(horse_ids, edit_horse_idx), horse_owner_id=get_selected_id(horse_owner_ids, edit_horse_owner_idx), jockey_id=get_selected_id(jockey_ids, edit_jockey_idx), previous_jockey_id=get_selected_id(jockey_ids, edit_previous_jockey_idx), trainer_id=get_selected_id(trainer_ids, edit_trainer_idx), breeding_farm_id=get_selected_id(breeding_farm_ids, edit_breeding_farm_idx), stallion_id=get_selected_id(stallion_ids, edit_stallion_idx), broodmare_sire_id=get_selected_id(stallion_ids, edit_broodmare_sire_idx), venue_id=get_selected_id(venue_ids, edit_venue_idx), previous_venue_id=get_selected_id(venue_ids, edit_previous_venue_idx), race_name_id=get_selected_id(race_ids, edit_race_idx), distance=to_optional_int(edit_distance), previous_distance=to_optional_int(edit_previous_distance), date_of_race=normalized_edit_date, previous_race_date=normalized_edit_previous_race_date, weight_change=to_optional_signed_float(edit_weight_change), memo=clean_text(edit_memo), finished_place=clean_text(edit_finished_place), program_number=to_optional_int(edit_program_number), number_of_horses=to_optional_int(edit_number_of_horses), odds=to_optional_float(edit_odds), prize=to_optional_float(edit_prize), checklist_data=edit_checklist_data if any(edit_checklist_data.values()) else None, bracket_number=to_optional_int(edit_bracket_number), horse_number=to_optional_int(edit_horse_number), horse_weight=_review_editor_weight_value(edit_horse_weight, entry.get('horse_weight'), clear_stored_horse_weight))
+        success, message = update_checklist(checklist_id=entry['id'], owner_id=owner_id, horse_id=get_selected_id(horse_ids, edit_horse_idx), horse_owner_id=get_selected_id(horse_owner_ids, edit_horse_owner_idx), jockey_id=get_selected_id(jockey_ids, edit_jockey_idx), previous_jockey_id=get_selected_id(jockey_ids, edit_previous_jockey_idx), trainer_id=get_selected_id(trainer_ids, edit_trainer_idx), breeding_farm_id=get_selected_id(breeding_farm_ids, edit_breeding_farm_idx), stallion_id=get_selected_id(stallion_ids, edit_stallion_idx), broodmare_sire_id=get_selected_id(stallion_ids, edit_broodmare_sire_idx), venue_id=get_selected_id(venue_ids, edit_venue_idx), previous_venue_id=get_selected_id(venue_ids, edit_previous_venue_idx), race_name_id=get_selected_id(race_ids, edit_race_idx), distance=to_optional_int(edit_distance), previous_distance=to_optional_int(edit_previous_distance), date_of_race=normalized_edit_date, previous_race_date=normalized_edit_previous_race_date, weight_change=to_optional_signed_float(edit_weight_change), memo=clean_text(edit_memo), finished_place=clean_text(edit_finished_place), program_number=to_optional_int(edit_program_number), number_of_horses=to_optional_int(edit_number_of_horses), odds=to_optional_float(edit_odds), prize=to_optional_float(edit_prize), checklist_data=edit_checklist_data if any(edit_checklist_data.values()) else None, bracket_number=to_optional_int(edit_bracket_number), horse_number=to_optional_int(edit_horse_number), horse_weight=_review_editor_weight_value(edit_horse_weight, entry.get('horse_weight'), clear_stored_horse_weight), race_class_id=rf_editor_class_id)
         if success:
             st.success(message)
             _queue_review_update_filter_restore(owner_id, _review_update_filter_snapshot)
@@ -3460,6 +4174,8 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
             st.rerun()
         else:
             st.error(message)
+
+
 
 
 
@@ -3667,6 +4383,7 @@ def render_second_filter_section(owner_id, first_filtered_checklists, horse_ids,
         second_selected_venue_ids = st.multiselect('Second Filter by Venues', venue_ids[1:], format_func=lambda venue_id: venue_options[venue_ids.index(venue_id)], key=second_filter_key(owner_id, 'venue_ids'))
         selected_previous_venue_id = render_second_filter_selectbox('Second Filter by Previous Venue', owner_id, 'previous_venue_id', venue_ids, venue_options)
         selected_race_name_id = render_second_filter_selectbox('Second Filter by Race Name', owner_id, 'race_name_id', race_ids, race_options)
+        rf_second_class_id = render_second_filter_selectbox('Second Filter by Race Class', owner_id, 'race_class_id', *_rf_class_options(owner_id))
         second_filter_memo_keyword = st.text_input('Second Filter memo or text contains keyword', key=second_filter_key(owner_id, 'memo_keyword'))
         second_filter_program_number = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=second_filter_key(owner_id, 'program_number'))
         second_filter_number_of_horses = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=second_filter_key(owner_id, 'number_of_horses'))
@@ -3702,9 +4419,10 @@ def render_second_filter_section(owner_id, first_filtered_checklists, horse_ids,
         second_enable_weight_filter = st.checkbox('Enable Second Filter Horse Weight', key=second_filter_key(owner_id, 'enable_weight_filter'))
         second_filter_weight_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_from'))
         second_filter_weight_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_to'))
-    second_selected_filters = {'horse_id': selected_horse_id, 'horse_owner_id': selected_horse_owner_id, 'jockey_id': selected_jockey_id, 'previous_jockey_id': selected_previous_jockey_id, 'trainer_id': selected_trainer_id, 'breeding_farm_id': selected_breeding_farm_id, 'stallion_id': selected_stallion_id, 'broodmare_sire_id': selected_broodmare_sire_id, 'previous_venue_id': selected_previous_venue_id, 'race_name_id': selected_race_name_id}
+    second_selected_filters = {'horse_id': selected_horse_id, 'horse_owner_id': selected_horse_owner_id, 'jockey_id': selected_jockey_id, 'previous_jockey_id': selected_previous_jockey_id, 'trainer_id': selected_trainer_id, 'breeding_farm_id': selected_breeding_farm_id, 'stallion_id': selected_stallion_id, 'broodmare_sire_id': selected_broodmare_sire_id, 'previous_venue_id': selected_previous_venue_id, 'race_name_id': selected_race_name_id, 'race_class_id': rf_second_class_id}
     second_filtered_checklists = filter_checklists(checklists=first_filtered_checklists, selected_filters=second_selected_filters, selected_venue_ids=second_selected_venue_ids, criteria_filters=second_filter_criteria, criteria_mode=second_criteria_mode, distance_from=second_filter_distance_from, distance_to=second_filter_distance_to, previous_distance_from=second_filter_previous_distance_from, previous_distance_to=second_filter_previous_distance_to, interval_days_from=second_filter_interval_days_from, interval_days_to=second_filter_interval_days_to, enable_weight_change_filter=second_filter_enable_weight_change_filter, weight_change_from=second_filter_weight_change_from, weight_change_to=second_filter_weight_change_to, date_from=second_filter_date_from, date_to=second_filter_date_to, memo_keyword=second_filter_memo_keyword, program_number=second_filter_program_number, number_of_horses=second_filter_number_of_horses, finished_places=second_filter_places, exclude_finished_places=second_exclude_finished_places, odds_from=second_filter_odds_from, odds_to=second_filter_odds_to, prize_from=second_filter_prize_from, prize_to=second_filter_prize_to, enable_bracket_filter=second_enable_bracket_filter, bracket_from=second_filter_bracket_from, bracket_to=second_filter_bracket_to, enable_horse_filter=second_enable_horse_filter, horse_from=second_filter_horse_from, horse_to=second_filter_horse_to, enable_weight_filter=second_enable_weight_filter, weight_from=second_filter_weight_from, weight_to=second_filter_weight_to, enable_distance_filter=st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False), enable_previous_distance_filter=st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False), enable_interval_days_filter=st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
     return (second_filtered_checklists, True)
+
 
 
 
@@ -4352,6 +5070,7 @@ def render_checklist_review_page():
     _review_repair_collapsed_numeric_filters(owner_id)
     st.header('Checklist Review')
     _current_review_filter_place_panel()
+    _rf_loader(owner_id, 'review')
     _review_show_numeric_filter_repair_notice(owner_id)
     checklists = get_user_checklists(owner_id)
     horses = get_user_horses(owner_id)
@@ -4466,6 +5185,7 @@ def render_checklist_review_page():
             selected_venue_ids = st.multiselect('Filter by Venues', venue_ids[1:], format_func=lambda venue_id: venue_options[venue_ids.index(venue_id)], help='Select multiple venues, for example 東京 and 中山.', key=saved_filter_key(owner_id, 'venue_ids'))
             selected_previous_venue_id = render_filter_selectbox('Filter by Previous Venue', owner_id, 'previous_venue_id', venue_ids, venue_options)
             selected_race_name_id = render_filter_selectbox('Filter by Race Name', owner_id, 'race_name_id', race_ids, race_options)
+            rf_first_class_id = render_filter_selectbox('Filter by Race Class', owner_id, 'race_class_id', *_rf_class_options(owner_id))
             filter_memo_keyword = st.text_input('Memo or text contains keyword', key=saved_filter_key(owner_id, 'memo_keyword'))
             filter_program_number = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=saved_filter_key(owner_id, 'program_number'))
             filter_number_of_horses = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=saved_filter_key(owner_id, 'number_of_horses'))
@@ -4515,7 +5235,7 @@ def render_checklist_review_page():
                     st.rerun()
                 else:
                     st.error(message)
-    selected_filters = {'horse_id': selected_horse_id, 'horse_owner_id': selected_horse_owner_id, 'jockey_id': selected_jockey_id, 'previous_jockey_id': selected_previous_jockey_id, 'trainer_id': selected_trainer_id, 'breeding_farm_id': selected_breeding_farm_id, 'stallion_id': selected_stallion_id, 'broodmare_sire_id': selected_broodmare_sire_id, 'previous_venue_id': selected_previous_venue_id, 'race_name_id': selected_race_name_id}
+    selected_filters = {'horse_id': selected_horse_id, 'horse_owner_id': selected_horse_owner_id, 'jockey_id': selected_jockey_id, 'previous_jockey_id': selected_previous_jockey_id, 'trainer_id': selected_trainer_id, 'breeding_farm_id': selected_breeding_farm_id, 'stallion_id': selected_stallion_id, 'broodmare_sire_id': selected_broodmare_sire_id, 'previous_venue_id': selected_previous_venue_id, 'race_name_id': selected_race_name_id, 'race_class_id': rf_first_class_id}
     first_filtered_checklists = filter_checklists(checklists=checklists, selected_filters=selected_filters, selected_venue_ids=selected_venue_ids, criteria_filters=filter_criteria, criteria_mode=criteria_mode, distance_from=filter_distance_from, distance_to=filter_distance_to, previous_distance_from=filter_previous_distance_from, previous_distance_to=filter_previous_distance_to, interval_days_from=filter_interval_days_from, interval_days_to=filter_interval_days_to, enable_weight_change_filter=filter_enable_weight_change_filter, weight_change_from=filter_weight_change_from, weight_change_to=filter_weight_change_to, date_from=filter_date_from, date_to=filter_date_to, memo_keyword=filter_memo_keyword, program_number=filter_program_number, number_of_horses=filter_number_of_horses, finished_places=filter_places, exclude_finished_places=exclude_finished_places, odds_from=filter_odds_from, odds_to=filter_odds_to, prize_from=filter_prize_from, prize_to=filter_prize_to, enable_bracket_filter=enable_bracket_filter, bracket_from=filter_bracket_from, bracket_to=filter_bracket_to, enable_horse_filter=enable_horse_filter, horse_from=filter_horse_from, horse_to=filter_horse_to, enable_weight_filter=enable_weight_filter, weight_from=filter_weight_from, weight_to=filter_weight_to, enable_distance_filter=st.session_state.get(saved_filter_key(owner_id, 'enable_distance_filter'), False), enable_previous_distance_filter=st.session_state.get(saved_filter_key(owner_id, 'enable_previous_distance_filter'), False), enable_interval_days_filter=st.session_state.get(saved_filter_key(owner_id, 'enable_interval_days_filter'), False))
     st.caption(f'First filter results: {len(first_filtered_checklists)} checklist(s)')
     with st.expander('🔎 Second Filter (Dominance Only — First Results Stay Visible)', expanded=False):
@@ -4617,6 +5337,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
@@ -4998,10 +5719,19 @@ def main():
         return
     st.sidebar.title('Horse Checklist App')
     st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
-    page = st.sidebar.radio('Menu', ['Checklist Review', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria'], key='app_navigation_page')
+    page = st.sidebar.radio('Menu', ['Checklist Review', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog'], key='app_navigation_page')
     if st.sidebar.button('Logout'):
         _persistent_login_logout()
         st.rerun()
+    if page == 'Race Templates':
+        _rf_templates_page(st.session_state.user_id)
+        return
+    if page == 'Race Classes':
+        _rf_classes_page(st.session_state.user_id)
+        return
+    if page == 'Race Blog':
+        _rf_blog_page(st.session_state.user_id)
+        return
     if page == 'Race Checklist':
         render_race_checklist_page()
     elif page == 'Checklist Review':
@@ -5026,6 +5756,7 @@ def main():
         render_template_page('race_name', 'Race Names', 'Race Name')
     elif page == 'Criteria':
         render_template_page('criteria', 'Criteria', 'Criteria Name')
+
 
 
 
