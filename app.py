@@ -3466,6 +3466,180 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
 # -------------------------------------------------
 # Second Filter UI
 # -------------------------------------------------
+# REVIEW_STABLE_NUMERIC_FILTER_VALUES_V1
+def _review_numeric_filter_cache(owner_id):
+    key = f"review_numeric_filter_cache_v1_{owner_id}"
+
+    cache = st.session_state.get(key)
+
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state[key] = cache
+
+    return cache
+
+
+def _review_numeric_filter_identity(owner_id, widget_key):
+    if not isinstance(widget_key, str):
+        return None
+
+    for prefix in (
+        f"saved_filter_{owner_id}_",
+        f"second_filter_{owner_id}_",
+    ):
+        if widget_key.startswith(prefix):
+            return prefix, widget_key[len(prefix):]
+
+    return None
+
+
+def _review_repair_collapsed_numeric_filters(owner_id):
+    defaults = get_filter_defaults()
+    cache = _review_numeric_filter_cache(owner_id)
+
+    collapsed_minimums = {
+        "distance_to": 0,
+        "previous_distance_to": 0,
+        "interval_days_to": 0,
+        "weight_change_to": -999.9,
+        "odds_to": 0.0,
+        "prize_to": 0.0,
+        "bracket_to": 1,
+        "horse_to": 1,
+        "weight_to": 0.0,
+    }
+
+    optional_switches = (
+        "enable_distance_filter",
+        "enable_previous_distance_filter",
+        "enable_interval_days_filter",
+        "enable_weight_change_filter",
+        "enable_bracket_filter",
+        "enable_horse_filter",
+        "enable_weight_filter",
+    )
+
+    repaired = []
+
+    for prefix, title in (
+        (f"saved_filter_{owner_id}_", "First Filter"),
+        (f"second_filter_{owner_id}_", "Second Filter"),
+    ):
+        # Do not reinterpret a set of enabled optional numeric filters.
+        if any(
+            bool(st.session_state.get(prefix + field, False))
+            for field in optional_switches
+        ):
+            continue
+
+        collapsed = [
+            field
+            for field, minimum in collapsed_minimums.items()
+            if (
+                field in defaults
+                and prefix + field in st.session_state
+                and st.session_state[prefix + field] == minimum
+                and defaults[field] != minimum
+            )
+        ]
+
+        # This targets the multi-field failure in the supplied diagnostic,
+        # rather than treating any legitimate zero upper bound as a bug.
+        if len(collapsed) < 7:
+            continue
+
+        for field in collapsed:
+            key = prefix + field
+            value = defaults[field]
+
+            st.session_state[key] = value
+            cache[key] = value
+
+        repaired.append(
+            title + ": " + ", ".join(collapsed)
+        )
+
+    if repaired:
+        st.session_state[
+            f"review_numeric_filter_repair_notice_{owner_id}"
+        ] = repaired
+
+
+def _review_show_numeric_filter_repair_notice(owner_id):
+    repaired = st.session_state.pop(
+        f"review_numeric_filter_repair_notice_{owner_id}",
+        [],
+    )
+
+    if repaired:
+        st.info(
+            "Recovered numeric filter upper bounds that had all fallen "
+            "back to their minimum values. Other filter choices were "
+            "preserved. Check Current Review Filters to confirm the ranges."
+        )
+
+        for message in repaired:
+            st.caption(message)
+
+
+def _review_stable_numeric_filter_input(
+    widget_function,
+    owner_id,
+    *args,
+    **kwargs,
+):
+    widget_key = kwargs.get("key")
+    identity = _review_numeric_filter_identity(owner_id, widget_key)
+
+    if identity is None:
+        return widget_function(*args, **kwargs)
+
+    _, field = identity
+    defaults = get_filter_defaults()
+
+    if field not in defaults:
+        return widget_function(*args, **kwargs)
+
+    default = defaults[field]
+
+    # Leave nonnumeric fields and boolean switches to their own widgets.
+    if isinstance(default, bool) or not isinstance(default, (int, float)):
+        return widget_function(*args, **kwargs)
+
+    cache = _review_numeric_filter_cache(owner_id)
+
+    if widget_key not in st.session_state:
+        # Recover a previously rendered value when a conditional widget's
+        # own key has disappeared. Otherwise use the app's real default,
+        # not the number input's minimum.
+        value = cache.get(widget_key, default)
+
+        if value is None:
+            value = default
+
+        st.session_state[widget_key] = value
+
+    # Session State is the single source of the initial widget value.
+    # Existing number inputs in this app use keyword arguments for value.
+    kwargs["value"] = None
+
+    result = widget_function(*args, **kwargs)
+
+    # A filter number input is not intended to remain blank.
+    # Keep a usable fallback in the independent cache without mutating
+    # the widget's Session State after it has been instantiated.
+    if result is not None:
+        cache[widget_key] = result
+        return result
+
+    fallback = cache.get(widget_key, default)
+
+    if fallback is None:
+        fallback = default
+
+    cache[widget_key] = fallback
+    return fallback
+
 def render_second_filter_section(owner_id, first_filtered_checklists, horse_ids, horse_options, horse_owner_ids, horse_owner_options, jockey_ids, jockey_options, trainer_ids, trainer_options, breeding_farm_ids, breeding_farm_options, stallion_ids, stallion_options, venue_ids, venue_options, race_ids, race_options, criteria):
     st.subheader('Second Filter')
     st.caption('The second filter calculates dominance within the first-filter results. It does not change the first-filter results list.')
@@ -3494,43 +3668,44 @@ def render_second_filter_section(owner_id, first_filtered_checklists, horse_ids,
         selected_previous_venue_id = render_second_filter_selectbox('Second Filter by Previous Venue', owner_id, 'previous_venue_id', venue_ids, venue_options)
         selected_race_name_id = render_second_filter_selectbox('Second Filter by Race Name', owner_id, 'race_name_id', race_ids, race_options)
         second_filter_memo_keyword = st.text_input('Second Filter memo or text contains keyword', key=second_filter_key(owner_id, 'memo_keyword'))
-        second_filter_program_number = st.number_input('Second Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=second_filter_key(owner_id, 'program_number'))
-        second_filter_number_of_horses = st.number_input('Second Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=second_filter_key(owner_id, 'number_of_horses'))
-        second_filter_odds_from = st.number_input('Second Filter From Odds', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'odds_from'))
-        second_filter_odds_to = st.number_input('Second Filter To Odds', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'odds_to'))
-        second_filter_prize_from = st.number_input('Second Filter From Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=second_filter_key(owner_id, 'prize_from'))
-        second_filter_prize_to = st.number_input('Second Filter To Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=second_filter_key(owner_id, 'prize_to'))
+        second_filter_program_number = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=second_filter_key(owner_id, 'program_number'))
+        second_filter_number_of_horses = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=second_filter_key(owner_id, 'number_of_horses'))
+        second_filter_odds_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Odds', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'odds_from'))
+        second_filter_odds_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Odds', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'odds_to'))
+        second_filter_prize_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=second_filter_key(owner_id, 'prize_from'))
+        second_filter_prize_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=second_filter_key(owner_id, 'prize_to'))
     with right_col:
         second_filter_criteria = st.multiselect('Second Filter by Criteria', [criterion['criteria_name'] for criterion in criteria], key=second_filter_key(owner_id, 'criteria'))
         second_criteria_mode = st.radio('Second Filter criteria match mode', ['AND', 'OR', 'NOT matched by criteria'], horizontal=True, key=second_filter_key(owner_id, 'criteria_mode'))
         st.checkbox('Second Filter: Apply Distance Filter', key=second_filter_key(owner_id, 'enable_distance_filter'))
-        second_filter_distance_from = st.number_input('Second Filter From Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'distance_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False))
-        second_filter_distance_to = st.number_input('Second Filter To Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'distance_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False))
+        second_filter_distance_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'distance_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False))
+        second_filter_distance_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'distance_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False))
         st.checkbox('Second Filter: Apply Previous Distance Filter', key=second_filter_key(owner_id, 'enable_previous_distance_filter'))
-        second_filter_previous_distance_from = st.number_input('Second Filter From Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'previous_distance_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False))
-        second_filter_previous_distance_to = st.number_input('Second Filter To Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'previous_distance_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False))
+        second_filter_previous_distance_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'previous_distance_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False))
+        second_filter_previous_distance_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=second_filter_key(owner_id, 'previous_distance_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False))
         st.checkbox('Second Filter: Apply Days Since Last Race Filter', key=second_filter_key(owner_id, 'enable_interval_days_filter'))
-        second_filter_interval_days_from = st.number_input('Second Filter From Days Since Last Race', min_value=0, max_value=9999, step=1, key=second_filter_key(owner_id, 'interval_days_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
-        second_filter_interval_days_to = st.number_input('Second Filter To Days Since Last Race', min_value=0, max_value=9999, step=1, key=second_filter_key(owner_id, 'interval_days_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
+        second_filter_interval_days_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Days Since Last Race', min_value=0, max_value=9999, step=1, key=second_filter_key(owner_id, 'interval_days_from'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
+        second_filter_interval_days_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Days Since Last Race', min_value=0, max_value=9999, step=1, key=second_filter_key(owner_id, 'interval_days_to'), disabled=not st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
         second_filter_enable_weight_change_filter = st.checkbox('Apply Second Weight Change Filter', key=second_filter_key(owner_id, 'enable_weight_change_filter'), help='Check to apply the From/To weight-change range. Unchecked means weight change is ignored.')
-        second_filter_weight_change_from = st.number_input('Second Filter From Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_change_from'), disabled=not second_filter_enable_weight_change_filter)
-        second_filter_weight_change_to = st.number_input('Second Filter To Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_change_to'), disabled=not second_filter_enable_weight_change_filter)
+        second_filter_weight_change_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_change_from'), disabled=not second_filter_enable_weight_change_filter)
+        second_filter_weight_change_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_change_to'), disabled=not second_filter_enable_weight_change_filter)
         second_filter_date_from = st.date_input('Second Filter From Date', key=second_filter_key(owner_id, 'date_from'))
         second_filter_date_to = st.date_input('Second Filter To Date', key=second_filter_key(owner_id, 'date_to'))
         second_filter_places = st.multiselect('Second Filter by Finished Place (着順)', [str(i) for i in range(1, 19)], help='Example: Select 1, 2, 3 for top-three results.', key=second_filter_key(owner_id, 'places'))
         second_exclude_finished_places = st.multiselect('Second Filter Exclude Finished Place (着順)', [str(i) for i in range(1, 19)], help='Example: Select 1, 2, 3 to exclude first-, second-, and third-place results.', key=second_filter_key(owner_id, 'exclude_places'))
         second_enable_bracket_filter = st.checkbox('Enable Second Filter Bracket Number', key=second_filter_key(owner_id, 'enable_bracket_filter'))
-        second_filter_bracket_from = st.number_input('Second Filter From Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=second_filter_key(owner_id, 'bracket_from'))
-        second_filter_bracket_to = st.number_input('Second Filter To Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=second_filter_key(owner_id, 'bracket_to'))
+        second_filter_bracket_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=second_filter_key(owner_id, 'bracket_from'))
+        second_filter_bracket_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=second_filter_key(owner_id, 'bracket_to'))
         second_enable_horse_filter = st.checkbox('Enable Second Filter Horse Number', key=second_filter_key(owner_id, 'enable_horse_filter'))
-        second_filter_horse_from = st.number_input('Second Filter From Horse Number (馬番)', min_value=1, max_value=18, step=1, key=second_filter_key(owner_id, 'horse_from'))
-        second_filter_horse_to = st.number_input('Second Filter To Horse Number (馬番)', min_value=1, max_value=18, step=1, key=second_filter_key(owner_id, 'horse_to'))
+        second_filter_horse_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Horse Number (馬番)', min_value=1, max_value=18, step=1, key=second_filter_key(owner_id, 'horse_from'))
+        second_filter_horse_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Horse Number (馬番)', min_value=1, max_value=18, step=1, key=second_filter_key(owner_id, 'horse_to'))
         second_enable_weight_filter = st.checkbox('Enable Second Filter Horse Weight', key=second_filter_key(owner_id, 'enable_weight_filter'))
-        second_filter_weight_from = st.number_input('Second Filter From Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_from'))
-        second_filter_weight_to = st.number_input('Second Filter To Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_to'))
+        second_filter_weight_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter From Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_from'))
+        second_filter_weight_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Second Filter To Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=second_filter_key(owner_id, 'weight_to'))
     second_selected_filters = {'horse_id': selected_horse_id, 'horse_owner_id': selected_horse_owner_id, 'jockey_id': selected_jockey_id, 'previous_jockey_id': selected_previous_jockey_id, 'trainer_id': selected_trainer_id, 'breeding_farm_id': selected_breeding_farm_id, 'stallion_id': selected_stallion_id, 'broodmare_sire_id': selected_broodmare_sire_id, 'previous_venue_id': selected_previous_venue_id, 'race_name_id': selected_race_name_id}
     second_filtered_checklists = filter_checklists(checklists=first_filtered_checklists, selected_filters=second_selected_filters, selected_venue_ids=second_selected_venue_ids, criteria_filters=second_filter_criteria, criteria_mode=second_criteria_mode, distance_from=second_filter_distance_from, distance_to=second_filter_distance_to, previous_distance_from=second_filter_previous_distance_from, previous_distance_to=second_filter_previous_distance_to, interval_days_from=second_filter_interval_days_from, interval_days_to=second_filter_interval_days_to, enable_weight_change_filter=second_filter_enable_weight_change_filter, weight_change_from=second_filter_weight_change_from, weight_change_to=second_filter_weight_change_to, date_from=second_filter_date_from, date_to=second_filter_date_to, memo_keyword=second_filter_memo_keyword, program_number=second_filter_program_number, number_of_horses=second_filter_number_of_horses, finished_places=second_filter_places, exclude_finished_places=second_exclude_finished_places, odds_from=second_filter_odds_from, odds_to=second_filter_odds_to, prize_from=second_filter_prize_from, prize_to=second_filter_prize_to, enable_bracket_filter=second_enable_bracket_filter, bracket_from=second_filter_bracket_from, bracket_to=second_filter_bracket_to, enable_horse_filter=second_enable_horse_filter, horse_from=second_filter_horse_from, horse_to=second_filter_horse_to, enable_weight_filter=second_enable_weight_filter, weight_from=second_filter_weight_from, weight_to=second_filter_weight_to, enable_distance_filter=st.session_state.get(second_filter_key(owner_id, 'enable_distance_filter'), False), enable_previous_distance_filter=st.session_state.get(second_filter_key(owner_id, 'enable_previous_distance_filter'), False), enable_interval_days_filter=st.session_state.get(second_filter_key(owner_id, 'enable_interval_days_filter'), False))
     return (second_filtered_checklists, True)
+
 
 
 
@@ -4174,8 +4349,10 @@ def render_checklist_review_page():
     _restore_review_update_filter_state(owner_id)
     initialize_filter_defaults(owner_id)
     initialize_second_filter_defaults(owner_id)
+    _review_repair_collapsed_numeric_filters(owner_id)
     st.header('Checklist Review')
     _current_review_filter_place_panel()
+    _review_show_numeric_filter_repair_notice(owner_id)
     checklists = get_user_checklists(owner_id)
     horses = get_user_horses(owner_id)
     horse_owners = get_user_horse_owners(owner_id)
@@ -4290,40 +4467,40 @@ def render_checklist_review_page():
             selected_previous_venue_id = render_filter_selectbox('Filter by Previous Venue', owner_id, 'previous_venue_id', venue_ids, venue_options)
             selected_race_name_id = render_filter_selectbox('Filter by Race Name', owner_id, 'race_name_id', race_ids, race_options)
             filter_memo_keyword = st.text_input('Memo or text contains keyword', key=saved_filter_key(owner_id, 'memo_keyword'))
-            filter_program_number = st.number_input('Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=saved_filter_key(owner_id, 'program_number'))
-            filter_number_of_horses = st.number_input('Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=saved_filter_key(owner_id, 'number_of_horses'))
-            filter_odds_from = st.number_input('From Odds', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'odds_from'))
-            filter_odds_to = st.number_input('To Odds', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'odds_to'))
-            filter_prize_from = st.number_input('From Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=saved_filter_key(owner_id, 'prize_from'))
-            filter_prize_to = st.number_input('To Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=saved_filter_key(owner_id, 'prize_to'))
+            filter_program_number = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Filter by Program Number', min_value=0, max_value=12, step=1, help='0 = all', key=saved_filter_key(owner_id, 'program_number'))
+            filter_number_of_horses = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Filter by Number of Horses', min_value=0, max_value=18, step=1, help='0 = all', key=saved_filter_key(owner_id, 'number_of_horses'))
+            filter_odds_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Odds', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'odds_from'))
+            filter_odds_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Odds', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'odds_to'))
+            filter_prize_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=saved_filter_key(owner_id, 'prize_from'))
+            filter_prize_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Prize (¥)', min_value=0.0, max_value=1000000000.0, step=1000.0, key=saved_filter_key(owner_id, 'prize_to'))
         with right_col:
             filter_criteria = st.multiselect('Filter by Criteria', [criterion['criteria_name'] for criterion in criteria], key=saved_filter_key(owner_id, 'criteria'))
             criteria_mode = st.radio('Criteria match mode', ['AND', 'OR', 'NOT matched by criteria'], horizontal=True, key=saved_filter_key(owner_id, 'criteria_mode'))
             st.checkbox('Apply Distance Filter', key=saved_filter_key(owner_id, 'enable_distance_filter'))
-            filter_distance_from = st.number_input('From Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'distance_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_distance_filter'), False))
-            filter_distance_to = st.number_input('To Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'distance_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_distance_filter'), False))
+            filter_distance_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'distance_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_distance_filter'), False))
+            filter_distance_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'distance_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_distance_filter'), False))
             st.checkbox('Apply Previous Distance Filter', key=saved_filter_key(owner_id, 'enable_previous_distance_filter'))
-            filter_previous_distance_from = st.number_input('From Previous Distance (meters)', min_value=0, max_value=5000, step=100, help='0 includes records with no previous distance. Use 1 or more to require a previous distance.', key=saved_filter_key(owner_id, 'previous_distance_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_previous_distance_filter'), False))
-            filter_previous_distance_to = st.number_input('To Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'previous_distance_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_previous_distance_filter'), False))
+            filter_previous_distance_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Previous Distance (meters)', min_value=0, max_value=5000, step=100, help='0 includes records with no previous distance. Use 1 or more to require a previous distance.', key=saved_filter_key(owner_id, 'previous_distance_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_previous_distance_filter'), False))
+            filter_previous_distance_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Previous Distance (meters)', min_value=0, max_value=5000, step=100, key=saved_filter_key(owner_id, 'previous_distance_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_previous_distance_filter'), False))
             st.checkbox('Apply Days Since Last Race Filter', key=saved_filter_key(owner_id, 'enable_interval_days_filter'))
-            filter_interval_days_from = st.number_input('From Days Since Last Race', min_value=0, max_value=9999, step=1, help='0 includes records with no previous race date. Use 1 or more to require a calculated interval.', key=saved_filter_key(owner_id, 'interval_days_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_interval_days_filter'), False))
-            filter_interval_days_to = st.number_input('To Days Since Last Race', min_value=0, max_value=9999, step=1, key=saved_filter_key(owner_id, 'interval_days_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_interval_days_filter'), False))
+            filter_interval_days_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Days Since Last Race', min_value=0, max_value=9999, step=1, help='0 includes records with no previous race date. Use 1 or more to require a calculated interval.', key=saved_filter_key(owner_id, 'interval_days_from'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_interval_days_filter'), False))
+            filter_interval_days_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Days Since Last Race', min_value=0, max_value=9999, step=1, key=saved_filter_key(owner_id, 'interval_days_to'), disabled=not st.session_state.get(saved_filter_key(owner_id, 'enable_interval_days_filter'), False))
             filter_enable_weight_change_filter = st.checkbox('Apply Weight Change Filter', key=saved_filter_key(owner_id, 'enable_weight_change_filter'), help='Check to apply the From/To weight-change range. Unchecked means weight change is ignored.')
-            filter_weight_change_from = st.number_input('From Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, help='Negative values represent weight loss. Positive values are entered without a + sign.', key=saved_filter_key(owner_id, 'weight_change_from'), disabled=not filter_enable_weight_change_filter)
-            filter_weight_change_to = st.number_input('To Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_change_to'), disabled=not filter_enable_weight_change_filter)
+            filter_weight_change_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, help='Negative values represent weight loss. Positive values are entered without a + sign.', key=saved_filter_key(owner_id, 'weight_change_from'), disabled=not filter_enable_weight_change_filter)
+            filter_weight_change_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Weight Change (kg)', min_value=-999.9, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_change_to'), disabled=not filter_enable_weight_change_filter)
             filter_date_from = st.date_input('From Date', key=saved_filter_key(owner_id, 'date_from'))
             filter_date_to = st.date_input('To Date', key=saved_filter_key(owner_id, 'date_to'))
             filter_places = st.multiselect('Filter by Finished Place (着順)', [str(i) for i in range(1, 19)], help='Example: Select 1, 2, 3 for top-three results.', key=saved_filter_key(owner_id, 'places'))
             exclude_finished_places = st.multiselect('Exclude Finished Place (着順)', [str(i) for i in range(1, 19)], help='Example: Select 1, 2, 3 to show all results except first-, second-, and third-place horses.', key=saved_filter_key(owner_id, 'exclude_places'))
             enable_bracket_filter = st.checkbox('Enable Bracket Number filter', key=saved_filter_key(owner_id, 'enable_bracket_filter'))
-            filter_bracket_from = st.number_input('From Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=saved_filter_key(owner_id, 'bracket_from'))
-            filter_bracket_to = st.number_input('To Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=saved_filter_key(owner_id, 'bracket_to'))
+            filter_bracket_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=saved_filter_key(owner_id, 'bracket_from'))
+            filter_bracket_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Bracket Number (枠番)', min_value=1, max_value=8, step=1, key=saved_filter_key(owner_id, 'bracket_to'))
             enable_horse_filter = st.checkbox('Enable Horse Number filter', key=saved_filter_key(owner_id, 'enable_horse_filter'))
-            filter_horse_from = st.number_input('From Horse Number (馬番)', min_value=1, max_value=18, step=1, key=saved_filter_key(owner_id, 'horse_from'))
-            filter_horse_to = st.number_input('To Horse Number (馬番)', min_value=1, max_value=18, step=1, key=saved_filter_key(owner_id, 'horse_to'))
+            filter_horse_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Horse Number (馬番)', min_value=1, max_value=18, step=1, key=saved_filter_key(owner_id, 'horse_from'))
+            filter_horse_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Horse Number (馬番)', min_value=1, max_value=18, step=1, key=saved_filter_key(owner_id, 'horse_to'))
             enable_weight_filter = st.checkbox('Enable Horse Weight filter', key=saved_filter_key(owner_id, 'enable_weight_filter'))
-            filter_weight_from = st.number_input('From Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_from'))
-            filter_weight_to = st.number_input('To Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_to'))
+            filter_weight_from = _review_stable_numeric_filter_input(st.number_input, owner_id, 'From Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_from'))
+            filter_weight_to = _review_stable_numeric_filter_input(st.number_input, owner_id, 'To Horse Weight (kg)', min_value=0.0, max_value=999.9, step=0.1, key=saved_filter_key(owner_id, 'weight_to'))
         filter_save_col1, filter_save_col2 = st.columns([3, 1])
         with filter_save_col1:
             saved_filter_title = st.text_input('Save current filter with title', placeholder='Example: Tokyo 1600m, -6kg to 2kg, 21-35 days interval', key=saved_filter_key(owner_id, 'new_title'))
@@ -4422,7 +4599,7 @@ def render_checklist_review_page():
             page_size = int(selected_page_size)
         total_pages = max(1, (total_results + page_size - 1) // page_size)
         with display_col2:
-            current_page = st.number_input('Page', min_value=1, max_value=total_pages, value=min(int(st.session_state.get(saved_filter_key(owner_id, 'page_number'), 1)), total_pages), step=1, key=saved_filter_key(owner_id, 'page_number_input'))
+            current_page = _review_stable_numeric_filter_input(st.number_input, owner_id, 'Page', min_value=1, max_value=total_pages, value=min(int(st.session_state.get(saved_filter_key(owner_id, 'page_number'), 1)), total_pages), step=1, key=saved_filter_key(owner_id, 'page_number_input'))
         st.session_state[saved_filter_key(owner_id, 'page_size')] = selected_page_size
         st.session_state[saved_filter_key(owner_id, 'page_number')] = current_page
         paginated_checklists = get_paginated_items(first_filtered_checklists, current_page, page_size)
@@ -4440,6 +4617,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
