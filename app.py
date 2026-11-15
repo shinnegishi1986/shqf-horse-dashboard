@@ -46,6 +46,360 @@ _RF_UNSET = object()
 
 # CHECKLIST_REVIEW_SINGLE_REFERENCE_INPUT_V1
 
+# MONTHLY_PRIZE_COMPARISON_V1
+
+# RACE_TEMPLATE_SINGLE_RACE_NAME_V1
+
+# MONTHLY_TRAINER_AND_TOUCH_CHART_V1
+
+
+# PRIZE_PERIODS_AND_INLINE_TOUCH_DETAILS_V1
+
+def _mp_dates(year, month, period="Month"):
+    from datetime import date
+
+    year, month = int(year), int(month)
+
+    # Validate the selected year/month.
+    date(year, month, 1)
+
+    if period == "Annual (calendar year)":
+        return (
+            date(year, 1, 1),
+            date(year + 1, 1, 1),
+        )
+
+    spans = {
+        "Month": 1,
+        "3 months": 3,
+        "6 months": 6,
+    }
+
+    if period not in spans:
+        raise ValueError("Unknown comparison period.")
+
+    index = year * 12 + month - 1
+
+    first_year, first_month = divmod(
+        index - spans[period] + 1,
+        12,
+    )
+
+    next_year, next_month = divmod(
+        index + 1,
+        12,
+    )
+
+    return (
+        date(first_year, first_month + 1, 1),
+        date(next_year, next_month + 1, 1),
+    )
+
+
+def _mp_bounds(year, month, period="Month"):
+    first, end = _mp_dates(
+        year,
+        month,
+        period,
+    )
+
+    return first.isoformat(), end.isoformat()
+
+
+# PRIZE_ANALYTICS_DARK_DESIGN_V1
+
+def _mct_chart(chart_rows, stats, label, kind, year, month, *, period='Month'):
+    import json
+    from datetime import timedelta
+    import streamlit.components.v1 as components
+    first, end = _mp_dates(year, month, period)
+    last = end - timedelta(days=1)
+    entities = list(stats['entity_order'])
+    if not entities:
+        return
+    payload = json.dumps({'rows': chart_rows, 'entities': entities, 'venues': list(stats['venue_order']), 'label': label, 'period': period, 'dates': f'{first.isoformat()} — {last.isoformat()}', 'total': stats['total'], 'valid': stats['valid'], 'missing': stats['missing'], 'invalid': stats['invalid'], 'invalid_dates': stats['invalid_dates']}, ensure_ascii=True, allow_nan=False)
+    payload = payload.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    html = '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<meta name="color-scheme" content="dark">\n<style>\n:root{\n  color-scheme:dark;\n  --bg:#0b1120;--panel:#111b2e;--raised:#17243b;\n  --line:#27354d;--fg:#edf3ff;--muted:#9aacc7;\n  --accent:#8ba9ff;\n}\n*{box-sizing:border-box}\n[hidden]{display:none!important}\nhtml,body{\n  margin:0;background:var(--bg);color:var(--fg);\n  font-family:Inter,ui-sans-serif,system-ui,-apple-system,\n    BlinkMacSystemFont,"Segoe UI",sans-serif;\n  -webkit-text-size-adjust:100%;\n  font-variant-numeric:tabular-nums;\n}\nbody{\n  padding:18px 18px 28px;\n  -webkit-overflow-scrolling:touch;\n}\n.header{\n  display:flex;justify-content:space-between;\n  gap:12px;align-items:flex-start;margin-bottom:18px;\n}\n.eyebrow{\n  font-size:10px;letter-spacing:.16em;\n  font-weight:700;color:var(--accent);margin-bottom:6px;\n}\n.title{\n  font-size:22px;font-weight:650;letter-spacing:-.025em;\n}\n.subtitle{\n  font-size:12px;color:var(--muted);\n  margin-top:7px;line-height:1.5;\n}\nbutton,select{\n  font:inherit;color:inherit;\n  border:1px solid var(--line);\n  background:var(--panel);border-radius:9px;\n  min-height:44px;padding:8px 12px;\n  touch-action:manipulation;font-size:14px;\n}\nselect{font-size:16px}\nbutton{cursor:pointer}\nbutton:disabled{opacity:.35;cursor:default}\nbutton:hover:not(:disabled){\n  border-color:#55729e;background:var(--raised);\n}\nbutton:focus-visible,select:focus-visible{\n  outline:2px solid #a6baff;outline-offset:3px;\n}\n.metrics{\n  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));\n  gap:10px;margin-bottom:20px;\n}\n.metric{\n  text-align:left;min-height:95px;padding:15px;\n  background:linear-gradient(145deg,#14213a,#101a2d);\n  border-radius:13px;\n}\n.metric-label{\n  display:block;font-size:11px;font-weight:500;\n  color:var(--muted);margin-bottom:11px;\n}\n.metric-value{\n  display:block;font-size:clamp(17px,2.4vw,25px);\n  font-weight:650;letter-spacing:-.03em;\n  overflow-wrap:anywhere;\n}\n.metric:first-child{border-color:#3a547e}\n.metric:first-child .metric-value{color:#bbccff}\n.chart-panel{\n  border:1px solid var(--line);border-radius:14px;\n  padding:14px;background:var(--panel);\n}\n.chart-heading{\n  display:flex;justify-content:space-between;\n  align-items:center;gap:12px;\n}\n.section-title{font-size:14px;font-weight:650}\n.micro{\n  font-size:11px;line-height:1.5;color:var(--muted);\n}\n.quality{\n  font-size:11px;color:#b8c7e3;\n  background:transparent;border:none;\n  min-height:36px;padding:4px 6px;\n}\n#legend{\n  display:flex;flex-wrap:wrap;\n  gap:8px 14px;margin:14px 0 8px;\n}\n.legend-item{\n  display:inline-flex;align-items:center;gap:6px;\n  color:#bdcbe0;font-size:11px;overflow-wrap:anywhere;\n}\n.swatch{\n  display:inline-block;width:8px;height:8px;\n  border-radius:3px;flex-shrink:0;\n}\n.toolbar{\n  display:flex;flex-wrap:wrap;align-items:center;\n  justify-content:space-between;gap:10px;\n  margin:12px 0 6px;padding-top:12px;\n  border-top:1px solid var(--line);\n}\n.navigation{\n  display:flex;align-items:center;gap:8px;\n}\n.navigation button{min-width:44px;padding:8px}\n.size-label{\n  display:flex;gap:8px;align-items:center;\n  color:var(--muted);font-size:11px;\n}\n.size-label select{min-width:70px}\n.footer{\n  margin-top:12px;border-top:1px solid var(--line);\n  padding-top:12px;\n}\n#axis{display:block;width:100%;height:28px}\n.bar-row{\n  padding:9px 0 11px;border-top:1px solid #1c2a40;\n}\n.row-head{\n  display:flex;align-items:center;\n  justify-content:space-between;gap:10px;\n}\n.name{\n  flex:1;display:flex;gap:10px;align-items:center;\n  text-align:left;min-width:0;border:none;\n  background:transparent;padding:0;min-height:44px;\n}\n.name:hover:not(:disabled){\n  background:transparent;border-color:transparent;\n}\n.rank{\n  font-size:11px;width:23px;\n  color:#7087a9;flex-shrink:0;\n}\n.entity-name{\n  font-size:13px;font-weight:550;overflow-wrap:anywhere;\n}\n.row-total{\n  text-align:right;font-size:13px;font-weight:650;\n  max-width:45%;overflow-wrap:anywhere;\n}\n.bar{\n  display:block;width:100%;height:34px;touch-action:pan-y;\n}\n.segment{cursor:pointer}\n.segment:focus{\n  outline:none;stroke:#e9f1ff;stroke-width:2;\n}\n#tip{\n  position:absolute;z-index:30;width:390px;\n  max-width:calc(100% - 24px);max-height:65vh;\n  overflow:auto;-webkit-overflow-scrolling:touch;\n  background:#19263d;color:#edf3ff;\n  border:1px solid #48638b;border-radius:13px;\n  padding:15px;box-shadow:0 16px 50px #0009;\n  font-size:12px;line-height:1.6;overflow-wrap:anywhere;\n}\n#tip strong{\n  display:block;font-size:14px;margin:0 52px 4px 0;\n}\n.close{\n  float:right;min-height:36px;\n  padding:4px 8px;font-size:11px;\n}\n.tip-rule{\n  border-top:1px solid #344864;margin:10px 0;\n}\n.tip-line{\n  display:flex;justify-content:space-between;\n  gap:15px;margin:3px 0;\n}\n.tip-line span:first-child{color:#aabbd6}\n.tip-line span:last-child{\n  text-align:right;font-weight:600;\n}\n.breakdown{\n  width:100%;border-collapse:collapse;\n  margin-top:9px;font-size:11px;\n}\n.breakdown th{\n  text-align:left;color:#aabbd6;font-weight:500;\n  padding:6px 4px;border-bottom:1px solid #344864;\n}\n.breakdown td{\n  padding:6px 4px;border-bottom:1px solid #293b55;\n}\n.breakdown th:not(:first-child),\n.breakdown td:not(:first-child){text-align:right}\n.note{\n  color:#aabbd6;font-size:11px;margin-top:10px;\n}\n@media(max-width:650px){\n  body{padding:12px}\n  .metrics{\n    grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;\n  }\n  .metric{min-height:85px;padding:12px}\n  .title{font-size:19px}\n  .chart-panel{padding:10px}\n  .metric-value{font-size:21px}\n  .header{margin-bottom:14px}\n}\n@media(prefers-reduced-motion:reduce){\n  *{scroll-behavior:auto!important}\n}\n</style>\n</head>\n<body>\n<header class="header">\n  <div>\n    <div class="eyebrow">PRIZE ANALYTICS</div>\n    <div id="title" class="title"></div>\n    <div id="subtitle" class="subtitle"></div>\n  </div>\n  <button\n    id="about"\n    type="button"\n    aria-label="About these totals">\n    About totals\n  </button>\n</header>\n\n<div class="metrics">\n  <button type="button" class="metric" id="kpiTotal">\n    <span class="metric-label">Recorded prize</span>\n    <span class="metric-value" id="total"></span>\n  </button>\n  <button type="button" class="metric" id="kpiRecords">\n    <span class="metric-label">Valid-prize checklists</span>\n    <span class="metric-value" id="records"></span>\n  </button>\n  <button type="button" class="metric" id="kpiNames">\n    <span class="metric-label" id="namesLabel"></span>\n    <span class="metric-value" id="names"></span>\n  </button>\n  <button type="button" class="metric" id="kpiVenues">\n    <span class="metric-label">Venues</span>\n    <span class="metric-value" id="venues"></span>\n  </button>\n</div>\n\n<section class="chart-panel">\n  <div class="chart-heading">\n    <div>\n      <div class="section-title">Prize by venue</div>\n      <div class="micro">\n        Ranked by total prize. Tap a segment for details;\n        tap a name for every venue.\n      </div>\n    </div>\n    <button\n      id="quality"\n      class="quality"\n      type="button">\n    </button>\n  </div>\n\n  <div id="legend"></div>\n\n  <div class="toolbar">\n    <div class="navigation">\n      <button\n        id="previous"\n        type="button"\n        aria-label="Previous chart view">\n        Previous\n      </button>\n      <span id="page" class="micro"></span>\n      <button\n        id="next"\n        type="button"\n        aria-label="Next chart view">\n        Next\n      </button>\n    </div>\n    <label class="size-label" for="pageSize">\n      Bars per view\n      <select id="pageSize">\n        <option>8</option>\n        <option>12</option>\n        <option>20</option>\n        <option selected>50</option>\n        <option>100</option>\n      </select>\n    </label>\n  </div>\n\n  <svg id="axis" aria-label="Recorded prize scale"></svg>\n  <div id="rows"></div>\n\n  <div class="toolbar footer">\n    <span id="range" class="micro"></span>\n    <div class="navigation">\n      <button id="previousBottom" type="button">Previous</button>\n      <button id="nextBottom" type="button">Next</button>\n    </div>\n  </div>\n</section>\n\n<div\n  id="tip"\n  role="dialog"\n  aria-label="Prize details"\n  hidden>\n</div>\n\n<script>\n"use strict";\n\nconst data=__MPD_DATA__;\nconst byId=id=>document.getElementById(id);\nconst ns="http://www.w3.org/2000/svg";\nconst tip=byId("tip");\n\nconst colors=[\n  "#88a8ff","#55d4c4","#f0bb72","#bd9bff","#f08fa8",\n  "#70bbeb","#b6d87c","#de9be2","#ed9c72","#a1b8d4",\n  "#6798e8","#39b4a6","#d5a35d","#9874dd","#ce718d",\n  "#5499c5","#92b15e","#bb79bd","#c97e53","#7b95b5"\n];\n\nconst color=index=>index<colors.length\n  ?colors[index]\n  :"hsl("+((index*137.508)%360)+",65%,65%)";\n\nconst number=value=>new Intl.NumberFormat(\n  undefined,\n  {maximumFractionDigits:20}\n).format(value);\n\nconst money=value=>"JPY "+number(value);\nconst percent=value=>(value*100).toFixed(1)+"%";\n\nconst matrix=new Map();\nconst totals=new Map();\n\ndata.entities.forEach(name=>{\n  matrix.set(name,new Map());\n  totals.set(name,0);\n});\n\ndata.rows.forEach(row=>{\n  if(matrix.has(row.entity)){\n    matrix.get(row.entity).set(row.venue,row);\n    totals.set(row.entity,row.entity_total);\n  }\n});\n\nconst maximum=Math.max(\n  1,\n  data.entities.reduce(\n    (current,name)=>Math.max(\n      current,\n      totals.get(name)||0\n    ),\n    0\n  )\n);\n\nlet page=0;\nlet pageSize=50;\nlet entries=new Map();\nlet active=null;\nlet pinned=false;\nlet hideTimer=null;\n\nbyId("title").textContent=\n  data.label+" prize comparison";\n\nbyId("subtitle").textContent=\n  data.period+"  /  "+data.dates;\n\nbyId("total").textContent=money(data.total);\nbyId("records").textContent=number(data.valid);\n\nbyId("namesLabel").textContent=\n  "Selected "+\n  (\n    data.label==="Horse Owner"\n      ?"horse owners"\n      :data.label.toLowerCase()+"s"\n  );\n\nbyId("names").textContent=\n  number(data.entities.length);\n\nbyId("venues").textContent=\n  number(data.venues.length);\n\nconst excluded=\n  data.missing+data.invalid+data.invalid_dates;\n\nbyId("quality").textContent=excluded\n  ?number(excluded)+" excluded records"\n  :"Recorded data";\n\ndata.venues.forEach((name,index)=>{\n  const item=document.createElement("span");\n  const swatch=document.createElement("span");\n  const label=document.createElement("span");\n\n  item.className="legend-item";\n  swatch.className="swatch";\n  swatch.style.background=color(index);\n  label.textContent=name;\n\n  item.append(swatch,label);\n  byId("legend").appendChild(item);\n});\n\nfunction text(parent,tag,value,className){\n  const item=document.createElement(tag);\n  item.textContent=value;\n\n  if(className){\n    item.className=className;\n  }\n\n  parent.appendChild(item);\n  return item;\n}\n\nfunction line(key,value){\n  const row=document.createElement("div");\n  row.className="tip-line";\n\n  text(row,"span",key);\n  text(row,"span",value);\n  tip.appendChild(row);\n}\n\nfunction rule(){\n  const item=document.createElement("div");\n  item.className="tip-rule";\n  tip.appendChild(item);\n}\n\nfunction resetTip(){\n  tip.replaceChildren();\n\n  const close=text(\n    tip,\n    "button",\n    "Close",\n    "close"\n  );\n\n  close.type="button";\n  close.addEventListener("click",hide);\n}\n\nfunction highlight(){\n  entries.forEach((entry,entityIndex)=>{\n    entry.segments.forEach((rect,venueIndex)=>{\n      rect.setAttribute(\n        "stroke",\n        active&&\n        active.type==="bar"&&\n        active.ei===entityIndex&&\n        active.vi===venueIndex\n          ?"#edf3ff"\n          :"none"\n      );\n    });\n  });\n}\n\nfunction hide(){\n  clearTimeout(hideTimer);\n  tip.hidden=true;\n  active=null;\n  pinned=false;\n  document.body.style.paddingBottom="28px";\n  highlight();\n}\n\nfunction anchor(){\n  if(!active){\n    return null;\n  }\n\n  if(active.type==="bar"){\n    return (\n      entries.get(active.ei)||{}\n    ).svg;\n  }\n\n  return byId(active.id);\n}\n\nfunction place(scroll){\n  const item=anchor();\n\n  if(!item){\n    return;\n  }\n\n  tip.hidden=false;\n\n  const box=item.getBoundingClientRect();\n  const width=tip.offsetWidth;\n\n  tip.style.left=Math.max(\n    12,\n    Math.min(\n      box.left+window.scrollX,\n      window.innerWidth-width-12\n    )\n  )+"px";\n\n  // Bar details stay below the selected bar.\n  tip.style.top=(\n    box.bottom+window.scrollY+8\n  )+"px";\n\n  document.body.style.paddingBottom=(\n    tip.offsetHeight+30\n  )+"px";\n\n  if(scroll){\n    const rect=tip.getBoundingClientRect();\n\n    if(\n      rect.bottom>window.innerHeight||\n      rect.top<0\n    ){\n      tip.scrollIntoView({\n        block:"nearest",\n        behavior:window.matchMedia(\n          "(prefers-reduced-motion: reduce)"\n        ).matches\n          ?"auto"\n          :"smooth"\n      });\n    }\n  }\n}\n\nfunction about(id,pin){\n  clearTimeout(hideTimer);\n  active={type:"about",id:id};\n  pinned=pin;\n\n  resetTip();\n\n  text(\n    tip,\n    "strong",\n    "About the recorded totals"\n  );\n\n  text(tip,"div",data.dates,"micro");\n  rule();\n\n  line("Recorded prize",money(data.total));\n  line("Valid-prize checklists",number(data.valid));\n  line("Missing prize",number(data.missing));\n  line("Invalid prize",number(data.invalid));\n  line("Invalid race date",number(data.invalid_dates));\n\n  text(\n    tip,\n    "div",\n    "Uses your saved checklist prizes and race dates, "+\n    "across all finishing places. Review filters do not apply. "+\n    "Zero prizes are valid; missing, negative and non-finite "+\n    "prizes are excluded. These totals are not calculated "+\n    "jockey fees, trainer fees or ownership payout shares. "+\n    "Missing reference names are not selectable. "+\n    "A calendar-year period includes January–December; "+\n    "rolling periods end in the selected month.",\n    "note"\n  );\n\n  highlight();\n  place(pin);\n}\n\nfunction barDetails(entityIndex,venueIndex,pin){\n  clearTimeout(hideTimer);\n\n  const entry=entries.get(entityIndex);\n\n  if(!entry){\n    return;\n  }\n\n  const name=data.entities[entityIndex];\n  const total=totals.get(name)||0;\n\n  const row=venueIndex===null\n    ?null\n    :matrix.get(name).get(data.venues[venueIndex]);\n\n  active={\n    type:"bar",\n    ei:entityIndex,\n    vi:venueIndex\n  };\n\n  pinned=pin;\n  resetTip();\n\n  text(tip,"strong",name);\n  text(tip,"div",data.dates,"micro");\n  rule();\n\n  if(venueIndex!==null){\n    line("Venue",data.venues[venueIndex]);\n    line("Venue prize",money(row?row.prize:0));\n\n    line(\n      "Share of participant total",\n      percent(\n        total>0\n          ?(row?row.prize:0)/total\n          :0\n      )\n    );\n\n    line(\n      "Valid-prize checklists",\n      number(row?row.checklists:0)\n    );\n\n    rule();\n  }\n\n  line("Participant total",money(total));\n\n  line(\n    "Share of comparison total",\n    percent(\n      data.total>0\n        ?total/data.total\n        :0\n    )\n  );\n\n  if(venueIndex===null){\n    line(\n      "Valid-prize checklists",\n      number(\n        Array.from(\n          matrix.get(name).values()\n        ).reduce(\n          (sum,item)=>sum+item.checklists,\n          0\n        )\n      )\n    );\n\n    if(data.venues.length){\n      const table=document.createElement("table");\n      table.className="breakdown";\n\n      const head=document.createElement("tr");\n\n      ["Venue","Prize (JPY)","Records"].forEach(value=>{\n        text(head,"th",value);\n      });\n\n      table.appendChild(head);\n\n      data.venues.forEach(venue=>{\n        const record=matrix.get(name).get(venue);\n        const tableRow=document.createElement("tr");\n\n        text(tableRow,"td",venue);\n\n        text(\n          tableRow,\n          "td",\n          number(record?record.prize:0)\n        );\n\n        text(\n          tableRow,\n          "td",\n          number(record?record.checklists:0)\n        );\n\n        table.appendChild(tableRow);\n      });\n\n      tip.appendChild(table);\n\n    }else{\n      text(\n        tip,\n        "div",\n        "No valid prize values were recorded for this selection.",\n        "note"\n      );\n    }\n  }\n\n  highlight();\n  place(pin);\n}\n\nfunction laterHide(){\n  if(!pinned){\n    clearTimeout(hideTimer);\n    hideTimer=setTimeout(hide,180);\n  }\n}\n\nfunction svgElement(svg,tag,attributes,value){\n  const node=document.createElementNS(ns,tag);\n\n  Object.entries(attributes).forEach(([key,item])=>{\n    node.setAttribute(key,String(item));\n  });\n\n  if(value!==undefined){\n    node.textContent=value;\n  }\n\n  svg.appendChild(node);\n  return node;\n}\n\nfunction bindSegment(node,entityIndex,venueIndex){\n  node.setAttribute("tabindex","0");\n  node.setAttribute("role","button");\n  node.classList.add("segment");\n\n  node.setAttribute(\n    "aria-label",\n    data.entities[entityIndex]+", "+\n    (\n      venueIndex===null\n        ?"all venues"\n        :data.venues[venueIndex]\n    )+", show prize details"\n  );\n\n  node.addEventListener("click",()=>{\n    barDetails(entityIndex,venueIndex,true);\n  });\n\n  node.addEventListener("keydown",event=>{\n    if(\n      event.key==="Enter"||\n      event.key===" "\n    ){\n      event.preventDefault();\n      barDetails(entityIndex,venueIndex,true);\n    }\n  });\n\n  node.addEventListener("pointerenter",event=>{\n    if(\n      event.pointerType==="mouse"&&\n      !pinned\n    ){\n      barDetails(entityIndex,venueIndex,false);\n    }\n  });\n\n  node.addEventListener("pointerleave",laterHide);\n\n  node.addEventListener("focus",()=>{\n    if(!pinned){\n      barDetails(entityIndex,venueIndex,false);\n    }\n  });\n\n  node.addEventListener("blur",laterHide);\n}\n\nfunction paint(){\n  const axis=byId("axis");\n  const width=Math.max(\n    240,\n    axis.clientWidth||700\n  );\n\n  axis.replaceChildren();\n  axis.setAttribute(\n    "viewBox",\n    "0 0 "+width+" 28"\n  );\n\n  [0,maximum/2,maximum].forEach((value,index)=>{\n    svgElement(\n      axis,\n      "text",\n      {\n        x:(value/maximum)*width,\n        y:19,\n        fill:"#8398b8",\n        "font-size":10,\n        "text-anchor":index===0\n          ?"start"\n          :index===2\n            ?"end"\n            :"middle"\n      },\n      new Intl.NumberFormat(\n        undefined,\n        {\n          notation:"compact",\n          maximumFractionDigits:1\n        }\n      ).format(value)\n    );\n  });\n\n  entries.forEach((entry,entityIndex)=>{\n    entry.svg.replaceChildren();\n    entry.segments=new Map();\n\n    const width=Math.max(\n      240,\n      entry.svg.clientWidth||700\n    );\n\n    entry.svg.setAttribute(\n      "viewBox",\n      "0 0 "+width+" 34"\n    );\n\n    const hit=svgElement(\n      entry.svg,\n      "rect",\n      {\n        x:0,\n        y:0,\n        width:width,\n        height:34,\n        rx:5,\n        fill:"#0c1526"\n      }\n    );\n\n    bindSegment(\n      hit,\n      entityIndex,\n      null\n    );\n\n    let offset=0;\n    const name=data.entities[entityIndex];\n\n    data.venues.forEach((venue,venueIndex)=>{\n      const row=matrix.get(name).get(venue);\n      const value=row?row.prize:0;\n\n      if(value>0){\n        const rect=svgElement(\n          entry.svg,\n          "rect",\n          {\n            x:(offset/maximum)*width,\n            y:3,\n            width:(value/maximum)*width,\n            height:28,\n            fill:color(venueIndex),\n            stroke:"none",\n            "stroke-width":2\n          }\n        );\n\n        entry.segments.set(\n          venueIndex,\n          rect\n        );\n\n        bindSegment(\n          rect,\n          entityIndex,\n          venueIndex\n        );\n      }\n\n      offset+=value;\n    });\n  });\n\n  highlight();\n\n  if(active&&!tip.hidden){\n    place(false);\n  }\n}\n\nfunction render(){\n  byId("rows").replaceChildren();\n  entries=new Map();\n\n  const start=page*pageSize;\n\n  const end=Math.min(\n    data.entities.length,\n    start+pageSize\n  );\n\n  for(\n    let entityIndex=start;\n    entityIndex<end;\n    entityIndex++\n  ){\n    const row=document.createElement("section");\n    const head=document.createElement("div");\n    const name=document.createElement("button");\n    const total=document.createElement("span");\n    const svg=document.createElementNS(ns,"svg");\n\n    row.className="bar-row";\n    head.className="row-head";\n\n    name.type="button";\n    name.className="name";\n\n    text(\n      name,\n      "span",\n      String(entityIndex+1).padStart(2,"0"),\n      "rank"\n    );\n\n    text(\n      name,\n      "span",\n      data.entities[entityIndex],\n      "entity-name"\n    );\n\n    name.addEventListener("click",()=>{\n      barDetails(entityIndex,null,true);\n    });\n\n    total.className="row-total";\n    total.textContent=money(\n      totals.get(data.entities[entityIndex])||0\n    );\n\n    head.append(name,total);\n\n    svg.classList.add("bar");\n    svg.setAttribute("role","group");\n\n    svg.setAttribute(\n      "aria-label",\n      data.entities[entityIndex]+" prize by venue"\n    );\n\n    row.append(head,svg);\n    byId("rows").appendChild(row);\n\n    entries.set(\n      entityIndex,\n      {\n        svg:svg,\n        segments:new Map()\n      }\n    );\n  }\n\n  const pages=Math.max(\n    1,\n    Math.ceil(data.entities.length/pageSize)\n  );\n\n  byId("page").textContent=\n    (page+1)+" / "+pages;\n\n  byId("range").textContent=\n    "Showing "+(start+1)+"–"+end+\n    " of "+data.entities.length+\n    "  ·  Same prize scale across views";\n\n  ["previous","previousBottom"].forEach(id=>{\n    byId(id).disabled=page===0;\n  });\n\n  ["next","nextBottom"].forEach(id=>{\n    byId(id).disabled=page>=pages-1;\n  });\n\n  paint();\n}\n\nfunction move(amount){\n  hide();\n\n  page=Math.max(\n    0,\n    Math.min(\n      Math.ceil(data.entities.length/pageSize)-1,\n      page+amount\n    )\n  );\n\n  render();\n  window.scrollTo({top:0});\n}\n\n["previous","previousBottom"].forEach(id=>{\n  byId(id).addEventListener("click",()=>{\n    move(-1);\n  });\n});\n\n["next","nextBottom"].forEach(id=>{\n  byId(id).addEventListener("click",()=>{\n    move(1);\n  });\n});\n\nbyId("pageSize").addEventListener("change",event=>{\n  hide();\n  pageSize=Number(event.target.value);\n  page=0;\n  render();\n});\n\n[\n  "about",\n  "quality",\n  "kpiTotal",\n  "kpiRecords",\n  "kpiNames",\n  "kpiVenues"\n].forEach(id=>{\n  const item=byId(id);\n\n  item.addEventListener("click",()=>{\n    about(id,true);\n  });\n\n  item.addEventListener("pointerenter",event=>{\n    if(\n      event.pointerType==="mouse"&&\n      !pinned\n    ){\n      about(id,false);\n    }\n  });\n\n  item.addEventListener(\n    "pointerleave",\n    laterHide\n  );\n});\n\ntip.addEventListener("pointerenter",()=>{\n  clearTimeout(hideTimer);\n});\n\ntip.addEventListener(\n  "pointerleave",\n  laterHide\n);\n\ndocument.addEventListener("pointerdown",event=>{\n  if(\n    !tip.hidden&&\n    !tip.contains(event.target)&&\n    !event.target.closest(\n      ".bar-row,.metric,#about,#quality"\n    )\n  ){\n    hide();\n  }\n});\n\ndocument.addEventListener("keydown",event=>{\n  if(event.key==="Escape"){\n    hide();\n  }\n});\n\nlet resizeTimer;\n\nwindow.addEventListener("resize",()=>{\n  clearTimeout(resizeTimer);\n  resizeTimer=setTimeout(paint,100);\n});\n\nrender();\n</script>\n</body>\n</html>'
+    components.html(html.replace('__MPD_DATA__', payload, 1), height=880, scrolling=True)
+
+
+
+def _rtn_require_native():
+    import inspect
+
+    try:
+        supported = (
+            "accept_new_options"
+            in inspect.signature(st.selectbox).parameters
+        )
+    except (TypeError, ValueError):
+        supported = False
+
+    if not supported:
+        st.error(
+            "Race-name entry requires a Streamlit version "
+            "supporting selectbox accept_new_options. "
+            "Upgrade and restart: "
+            "python -m pip install --upgrade streamlit"
+        )
+        st.stop()
+
+
+def _rtn_input(owner_id, key, current_id=None):
+    rows = get_user_race_names(owner_id)
+
+    options = [None]
+
+    for row in rows:
+        name = str(row["race_name"]).strip()
+
+        if name and name not in options:
+            options.append(name)
+
+    current = next(
+        (
+            str(row["race_name"]).strip()
+            for row in rows
+            if row["id"] == current_id
+        ),
+        None,
+    )
+
+    if current not in options:
+        current = None
+
+    selected = st.selectbox(
+        "Race name",
+        options,
+        index=(
+            None
+            if key in st.session_state
+            else options.index(current)
+        ),
+        format_func=lambda value: (
+            "(Select or type a race name)"
+            if value is None
+            else value
+        ),
+        key=key,
+        accept_new_options=True,
+        placeholder=(
+            "Select a saved race name or type a new one"
+        ),
+        help=(
+            "Select a suggestion, or type a new name "
+            "and press Enter. New race names are registered "
+            "when the template is successfully saved."
+        ),
+    )
+
+    if selected is None or not str(selected).strip():
+        return None, ""
+
+    name = str(selected).strip()
+
+    exact = [
+        row
+        for row in rows
+        if str(row["race_name"]).strip() == name
+    ]
+
+    matches = exact or [
+        row
+        for row in rows
+        if str(row["race_name"]).strip().casefold()
+        == name.casefold()
+    ]
+
+    if matches:
+        row = next(
+            (
+                row
+                for row in matches
+                if row["id"] == current_id
+            ),
+            matches[0],
+        )
+
+        return row["id"], ""
+
+    # Existing save/update functions register this new name
+    # inside their database transaction.
+    return None, name
+
+def _mc_config(kind):
+    options = {'jockey': ('jockey_id', 'jockey_name', 'Jockey', 'Jockeys', get_user_jockeys), 'owner': ('horse_owner_id', 'horse_owner_name', 'Horse Owner', 'Horse Owners', get_user_horse_owners), 'trainer': ('trainer_id', 'trainer_name', 'Trainer', 'Trainers', get_user_trainers)}
+    if kind not in options:
+        raise ValueError('Unknown monthly comparison type.')
+    return options[kind]
+
+
+
+def _mc_bounds(year, month):
+    from datetime import date
+
+    start = date(int(year), int(month), 1)
+
+    if start.month == 12:
+        end = date(start.year + 1, 1, 1)
+    else:
+        end = date(start.year, start.month + 1, 1)
+
+    return start.isoformat(), end.isoformat()
+
+
+def _mc_fetch(owner_id, kind, year, month, *, period='Month'):
+    column = _mc_config(kind)[0]
+    start, end = _mp_bounds(year, month, period)
+    conn = get_db_connection()
+    try:
+        return [dict(row) for row in conn.execute(f'SELECT c.id,c.date_of_race,c.{column} AS entity_id,c.venue_id,v.venue_name,c.prize FROM checklists c LEFT JOIN venues v ON v.id=c.venue_id AND v.owner_id=c.owner_id WHERE c.owner_id=? AND c.date_of_race>=? AND c.date_of_race<?', (owner_id, start, end)).fetchall()]
+    finally:
+        conn.close()
+
+
+
+def _mc_names(rows, column):
+    from collections import Counter
+
+    names = {
+        row["id"]: str(row.get(column) or "(Unnamed)")
+        for row in rows
+    }
+
+    counts = Counter(names.values())
+
+    return {
+        item_id: (
+            name
+            if counts[name] == 1
+            else f"{name} (#{item_id})"
+        )
+        for item_id, name in names.items()
+    }
+
+
+def _mc_prepare(rows, names, selected, year, month, label, *, period='Month'):
+    _mp_range_start, _mp_range_end = _mp_dates(year, month, period)
+    import math
+    from datetime import date
+    from collections import Counter, defaultdict
+    selected = list(dict.fromkeys((item_id for item_id in selected if item_id in names)))
+    selected_set = set(selected)
+    groups = defaultdict(list)
+    venues = {}
+    valid_counts = Counter()
+    missing_counts = Counter()
+    invalid_counts = Counter()
+    invalid_dates = 0
+    for row in rows:
+        entity_id = row['entity_id']
+        if entity_id not in selected_set:
+            continue
+        try:
+            race_date = date.fromisoformat(str(row['date_of_race'])[:10])
+        except (ValueError, TypeError):
+            invalid_dates += 1
+            continue
+        if not _mp_range_start <= race_date < _mp_range_end:
+            continue
+        raw = row.get('prize')
+        if raw is None or (isinstance(raw, str) and (not raw.strip())):
+            missing_counts[entity_id] += 1
+            continue
+        try:
+            prize = float(raw)
+            if not math.isfinite(prize) or prize < 0:
+                raise ValueError()
+        except (ValueError, TypeError, OverflowError):
+            invalid_counts[entity_id] += 1
+            continue
+        venue_id = row.get('venue_id')
+        venues[venue_id] = str(row.get('venue_name') or ('(No venue recorded)' if venue_id is None else '(Unavailable venue)'))
+        groups[entity_id, venue_id].append(prize)
+        valid_counts[entity_id] += 1
+    duplicates = Counter(venues.values())
+    venue_names = {venue_id: name if duplicates[name] == 1 else f'{name} (#{venue_id})' for venue_id, name in venues.items()}
+    venue_order = sorted(venues, key=lambda value: (venue_names[value].casefold(), str(value)))
+    try:
+        sums = {key: math.fsum(values) for key, values in groups.items()}
+        totals = {entity_id: math.fsum((sums.get((entity_id, venue), 0.0) for venue in venue_order)) for entity_id in selected}
+        total = math.fsum(totals.values())
+    except OverflowError:
+        raise ValueError('Prize totals overflowed. Check the recorded prize values.')
+    if not all((math.isfinite(value) for value in list(sums.values()) + list(totals.values()) + [total])):
+        raise ValueError('A prize total is not finite. Check the recorded prize values.')
+    ordered = sorted(selected, key=lambda value: (-totals[value], names[value].casefold(), value))
+    chart_rows = []
+    table_rows = []
+    for entity_id in ordered:
+        record = {label + ' ID': entity_id, label: names[entity_id], 'Total Prize (JPY)': totals[entity_id], 'Checklists with valid prize': valid_counts[entity_id], 'Missing prize': missing_counts[entity_id], 'Invalid prize': invalid_counts[entity_id]}
+        for rank, venue in enumerate(venue_order):
+            prize = sums.get((entity_id, venue), 0.0)
+            record['Venue: ' + venue_names[venue]] = prize
+            chart_rows.append({'entity': names[entity_id], 'venue': venue_names[venue], 'prize': prize, 'entity_total': totals[entity_id], 'checklists': len(groups.get((entity_id, venue), [])), 'venue_order': rank})
+        table_rows.append(record)
+    return (chart_rows, table_rows, {'total': total, 'valid': sum(valid_counts.values()), 'missing': sum(missing_counts.values()), 'invalid': sum(invalid_counts.values()), 'invalid_dates': invalid_dates, 'venues': len(venues), 'entity_order': [names[item_id] for item_id in ordered], 'venue_order': [venue_names[venue] for venue in venue_order]})
+
+
+
+def _mc_set_selected(key, values):
+    st.session_state[key] = list(values)
+
+
+def _mc_page(kind):
+    import calendar
+    import pandas as pd
+    from datetime import datetime, timedelta, timezone
+    owner_id = st.session_state.user_id
+    column, name_column, label, plural, getter = _mc_config(kind)
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    prefix = f'mc_{kind}_{owner_id}'
+    st.header(f'Prize Comparison by {label}')
+    first, second = st.columns(2)
+    with first:
+        year = int(st.number_input('Year', min_value=1980, max_value=2100, value=today.year, step=1, key=prefix + '_year'))
+    with second:
+        month = st.selectbox('Month', list(range(1, 13)), index=today.month - 1, format_func=lambda value: f'{value:02d} — {calendar.month_name[value]}', key=prefix + '_month')
+    from datetime import timedelta
+    period = st.radio('Data period', ['Month', '3 months', '6 months', 'Annual (calendar year)'], horizontal=True, key=prefix + '_period')
+    range_start, range_end = _mp_dates(year, month, period)
+    range_last = range_end - timedelta(days=1)
+    names = _mc_names(getter(owner_id), name_column)
+    if not names:
+        st.info(f'Register {plural.lower()} or save checklist references first.')
+        return
+    rows = _mc_fetch(owner_id, kind, year, month, period=period)
+    options = sorted(names, key=lambda value: (names[value].casefold(), value))
+    present = {row['entity_id'] for row in rows}
+    initial = [item_id for item_id in options if item_id in present]
+    selection_key = f'{prefix}_selected_{range_start.isoformat()}_{range_end.isoformat()}'
+    if selection_key in st.session_state:
+        st.session_state[selection_key] = [item_id for item_id in st.session_state[selection_key] if item_id in names]
+    all_column, clear_column = st.columns(2)
+    with all_column:
+        st.button('Select all registered ' + plural.lower(), key=prefix + '_all', on_click=_mc_set_selected, args=(selection_key, options))
+    with clear_column:
+        st.button('Clear selection', key=prefix + '_clear', on_click=_mc_set_selected, args=(selection_key, []))
+    selected = st.multiselect('Compare ' + plural.lower(), options, default=None if selection_key in st.session_state else initial, format_func=lambda value: names[value], key=selection_key, help="Defaults to registered participants appearing in the selected period's checklist records. Select all registered to include names with no records. An empty selection shows no comparison.")
+    if not selected:
+        st.info(f'Select one or more {plural.lower()} to compare.')
+        return
+    try:
+        chart_rows, table_rows, stats = _mc_prepare(rows, names, selected, year, month, label, period=period)
+    except ValueError as error:
+        st.error(str(error))
+        return
+    _mct_chart(chart_rows, stats, label, kind, year, month, period=period)
+    st.subheader(f'{period} — Prize Totals and Venue Breakdown')
+    table = pd.DataFrame(table_rows)
+    st.dataframe(table, hide_index=True, width='stretch')
+    st.download_button('Download Comparison CSV', table.to_csv(index=False).encode('utf-8-sig'), file_name=f'prize_{kind}_{range_start.isoformat()}_to_{range_last.isoformat()}.csv', mime='text/csv', key=prefix + '_download')
+
+
+
+
+
 def _crf_key(owner_id, entry_id, field):
     return f"crf_reference_{owner_id}_{entry_id}_{field}"
 
@@ -929,319 +1283,80 @@ def _rt_reload(owner_id, template_id):
 
 
 def _rt_manage(owner_id):
-    st.markdown("---")
-    st.subheader("Edit or Delete Race Templates")
-
-    notice = st.session_state.pop(
-        f"rt_notice_{owner_id}",
-        None,
-    )
-
+    _rtn_require_native()
+    st.markdown('---')
+    st.subheader('Edit or Delete Race Templates')
+    notice = st.session_state.pop(f'rt_notice_{owner_id}', None)
     if notice:
         st.success(notice)
-
     rows = _rf_templates(owner_id)
-
     if not rows:
-        st.info("No race templates are registered.")
+        st.info('No race templates are registered.')
         return
-
-    lookup = {
-        row["id"]: row
-        for row in rows
-    }
-
-    selected = st.selectbox(
-        "Template to edit or delete",
-        list(lookup),
-        format_func=lambda value: (
-            f"#{value} | {_rf_label(lookup[value])}"
-        ),
-        key=f"rt_selected_{owner_id}",
-    )
-
+    lookup = {row['id']: row for row in rows}
+    selected = st.selectbox('Template to edit or delete', list(lookup), format_func=lambda value: f'#{value} | {_rf_label(lookup[value])}', key=f'rt_selected_{owner_id}')
     current = lookup[selected]
-    snapshot_key = f"rt_snapshot_{owner_id}_{selected}"
-
+    snapshot_key = f'rt_snapshot_{owner_id}_{selected}'
     if snapshot_key not in st.session_state:
         st.session_state[snapshot_key] = dict(current)
-
     saved = st.session_state[snapshot_key]
-
-    st.button(
-        "Reload Stored Template",
-        key=f"rt_reload_{owner_id}_{selected}",
-        on_click=_rt_reload,
-        args=(owner_id, selected),
-        help=(
-            "Discard the editor's unsaved fields "
-            "and load the current template."
-        ),
-    )
-
-    if any(
-        current.get(key) != saved.get(key)
-        for key in _rt_fields()
-    ):
-        st.warning(
-            "The stored template changed. "
-            "Reload it before saving or deleting."
-        )
-
-    generation = st.session_state.get(
-        f"rt_generation_{owner_id}_{selected}",
-        0,
-    )
-
-    prefix = (
-        f"rt_edit_{owner_id}_{selected}_{generation}"
-    )
-
-    names = {
-        row["id"]: row["race_name"]
-        for row in get_user_race_names(owner_id)
-    }
-
-    venues = {
-        row["id"]: row["venue_name"]
-        for row in get_user_venues(owner_id)
-    }
-
+    st.button('Reload Stored Template', key=f'rt_reload_{owner_id}_{selected}', on_click=_rt_reload, args=(owner_id, selected), help="Discard the editor's unsaved fields and load the current template.")
+    if any((current.get(key) != saved.get(key) for key in _rt_fields())):
+        st.warning('The stored template changed. Reload it before saving or deleting.')
+    generation = st.session_state.get(f'rt_generation_{owner_id}_{selected}', 0)
+    prefix = f'rt_edit_{owner_id}_{selected}_{generation}'
+    names = {row['id']: row['race_name'] for row in get_user_race_names(owner_id)}
+    venues = {row['id']: row['venue_name'] for row in get_user_venues(owner_id)}
     class_ids, class_labels = _rf_class_options(owner_id)
     classes = dict(zip(class_ids, class_labels))
-
     name_ids = [None] + list(names)
     venue_ids = [None] + list(venues)
-
-    initial_name = (
-        saved.get("race_name_id")
-        if saved.get("race_name_id") in names
-        else None
-    )
-
-    initial_venue = (
-        saved.get("venue_id")
-        if saved.get("venue_id") in venues
-        else None
-    )
-
-    initial_class = (
-        saved.get("race_class_id")
-        if saved.get("race_class_id") in classes
-        else None
-    )
-
+    initial_name = saved.get('race_name_id') if saved.get('race_name_id') in names else None
+    initial_venue = saved.get('venue_id') if saved.get('venue_id') in venues else None
+    initial_class = saved.get('race_class_id') if saved.get('race_class_id') in classes else None
     try:
-        initial_date = date.fromisoformat(
-            saved["race_date"]
-        )
-
+        initial_date = date.fromisoformat(saved['race_date'])
     except (ValueError, TypeError):
         initial_date = date.today()
-
-        st.warning(
-            "The stored date is invalid. "
-            "Choose the correct date before saving."
-        )
-
-    initial_date = max(
-        date(1980, 1, 1),
-        min(date(2100, 12, 31), initial_date),
-    )
-
-    st.caption(
-        "Edits preserve the template ID and its blog links. "
-        "Existing checklist records are not changed. "
-        "Choosing a different race name does not rename "
-        "the shared Race Names entry."
-    )
-
+        st.warning('The stored date is invalid. Choose the correct date before saving.')
+    initial_date = max(date(1980, 1, 1), min(date(2100, 12, 31), initial_date))
+    st.caption('Edits preserve the template ID and its blog links. Existing checklist records are not changed. Choosing a different race name does not rename the shared Race Names entry.')
     with st.form(prefix):
-        name_id = st.selectbox(
-            "Race name",
-            name_ids,
-            index=name_ids.index(initial_name),
-            format_func=lambda value: (
-                "(Use a new race name)"
-                if value is None
-                else names[value]
-            ),
-            key=prefix + "_name",
-        )
-
-        new_name = st.text_input(
-            "New race name — only used when "
-            "Use a new race name is selected",
-            max_chars=200,
-            key=prefix + "_new_name",
-        )
-
-        venue_id = st.selectbox(
-            "Venue",
-            venue_ids,
-            index=venue_ids.index(initial_venue),
-            format_func=lambda value: (
-                "(Select a venue)"
-                if value is None
-                else venues[value]
-            ),
-            key=prefix + "_venue",
-        )
-
-        race_date = st.date_input(
-            "Race date",
-            value=initial_date,
-            min_value=date(1980, 1, 1),
-            max_value=date(2100, 12, 31),
-            key=prefix + "_date",
-        )
-
-        program = st.number_input(
-            "Program number",
-            min_value=1,
-            max_value=12,
-            value=max(
-                1,
-                min(
-                    12,
-                    int(saved.get("program_number") or 1),
-                ),
-            ),
-            key=prefix + "_program",
-        )
-
-        distance = st.number_input(
-            "Distance (meters)",
-            min_value=1,
-            max_value=5000,
-            value=max(
-                1,
-                min(
-                    5000,
-                    int(saved.get("distance") or 1600),
-                ),
-            ),
-            step=100,
-            key=prefix + "_distance",
-        )
-
-        horses = st.number_input(
-            "Number of horses",
-            min_value=1,
-            max_value=18,
-            value=max(
-                1,
-                min(
-                    18,
-                    int(saved.get("number_of_horses") or 18),
-                ),
-            ),
-            key=prefix + "_horses",
-        )
-
-        class_id = st.selectbox(
-            "Race class",
-            class_ids,
-            index=class_ids.index(initial_class),
-            format_func=lambda value: classes[value],
-            key=prefix + "_class",
-        )
-
-        submit = st.form_submit_button(
-            "Save Template Changes"
-        )
-
+        name_id, new_name = _rtn_input(owner_id, prefix + '_race_name', initial_name)
+        venue_id = st.selectbox('Venue', venue_ids, index=venue_ids.index(initial_venue), format_func=lambda value: '(Select a venue)' if value is None else venues[value], key=prefix + '_venue')
+        race_date = st.date_input('Race date', value=initial_date, min_value=date(1980, 1, 1), max_value=date(2100, 12, 31), key=prefix + '_date')
+        program = st.number_input('Program number', min_value=1, max_value=12, value=max(1, min(12, int(saved.get('program_number') or 1))), key=prefix + '_program')
+        distance = st.number_input('Distance (meters)', min_value=1, max_value=5000, value=max(1, min(5000, int(saved.get('distance') or 1600))), step=100, key=prefix + '_distance')
+        horses = st.number_input('Number of horses', min_value=1, max_value=18, value=max(1, min(18, int(saved.get('number_of_horses') or 18))), key=prefix + '_horses')
+        class_id = st.selectbox('Race class', class_ids, index=class_ids.index(initial_class), format_func=lambda value: classes[value], key=prefix + '_class')
+        submit = st.form_submit_button('Save Template Changes')
     if submit:
         try:
-            _rt_update(
-                owner_id,
-                selected,
-                saved,
-                name_id,
-                new_name,
-                race_date,
-                program,
-                distance,
-                horses,
-                class_id,
-                venue_id,
-            )
-
+            _rt_update(owner_id, selected, saved, name_id, new_name, race_date, program, distance, horses, class_id, venue_id)
         except sqlite3.IntegrityError:
-            st.error(
-                "Changes were not saved. Another template may "
-                "already use that race name, date, and program "
-                "number, or a referenced item is unavailable. "
-                "No other template was overwritten."
-            )
-
+            st.error('Changes were not saved. Another template may already use that race name, date, and program number, or a referenced item is unavailable. No other template was overwritten.')
         except (ValueError, sqlite3.Error) as error:
-            st.error(
-                f"Changes were not saved: {error}"
-            )
-
+            st.error(f'Changes were not saved: {error}')
         else:
             _rt_reload(owner_id, selected)
-
-            st.session_state[
-                f"rt_notice_{owner_id}"
-            ] = f"Template #{selected} updated."
-
+            st.session_state[f'rt_notice_{owner_id}'] = f'Template #{selected} updated.'
             st.rerun()
-
-    with st.expander(
-        "Delete Selected Template",
-        expanded=False,
-    ):
-        linked = _rf_rows(
-            "SELECT COUNT(*) AS n FROM rf_blog_posts "
-            "WHERE template_id=?",
-            (selected,),
-        )[0]["n"]
-
+    with st.expander('Delete Selected Template', expanded=False):
+        linked = _rf_rows('SELECT COUNT(*) AS n FROM rf_blog_posts WHERE template_id=?', (selected,))[0]['n']
         if linked:
-            st.warning(
-                f"This template has {linked} linked blog article(s). "
-                "Move those articles to another template "
-                "before deleting it."
-            )
-
-        st.caption(
-            "Deletion removes only this saved template. "
-            "It does not delete checklists, race names, venues, "
-            "classes, articles, tags, or images."
-        )
-
-        confirmed = st.checkbox(
-            f"Permanently delete template #{selected}",
-            key=prefix + "_confirm_delete",
-        )
-
-        if st.button(
-            "Delete Template Permanently",
-            key=prefix + "_delete",
-            disabled=not confirmed or bool(linked),
-        ):
+            st.warning(f'This template has {linked} linked blog article(s). Move those articles to another template before deleting it.')
+        st.caption('Deletion removes only this saved template. It does not delete checklists, race names, venues, classes, articles, tags, or images.')
+        confirmed = st.checkbox(f'Permanently delete template #{selected}', key=prefix + '_confirm_delete')
+        if st.button('Delete Template Permanently', key=prefix + '_delete', disabled=not confirmed or bool(linked)):
             try:
-                _rt_delete(
-                    owner_id,
-                    selected,
-                    saved,
-                )
-
+                _rt_delete(owner_id, selected, saved)
             except (ValueError, sqlite3.Error) as error:
-                st.error(
-                    f"Template was not deleted: {error}"
-                )
-
+                st.error(f'Template was not deleted: {error}')
             else:
                 _rt_reload(owner_id, selected)
-
-                st.session_state[
-                    f"rt_notice_{owner_id}"
-                ] = f"Template #{selected} deleted."
-
+                st.session_state[f'rt_notice_{owner_id}'] = f'Template #{selected} deleted.'
                 st.rerun()
+
 
 def _rb_migrate():
     conn = _rf_db()
@@ -2268,12 +2383,12 @@ def _rf_classes_page(owner_id):
 
 
 def _rf_templates_page(owner_id):
+    _rtn_require_native()
     st.header('Race Templates')
     names = {r['id']: r['race_name'] for r in get_user_race_names(owner_id)}
     st.caption('Saving the same race name, date, and program number updates that template. Existing checklist records do not change.')
     with st.form(f'rf_template_form_{owner_id}'):
-        name_id = st.selectbox('Existing race name', [None] + list(names), format_func=lambda x: '(Create a new race name)' if x is None else names[x])
-        name = st.text_input('New race name — used only for Create a new race name', max_chars=200)
+        name_id, name = _rtn_input(owner_id, f'rtn_create_{owner_id}')
         race_date = st.date_input('Race date', value=date.today(), min_value=date(1980, 1, 1), max_value=date(2100, 12, 31))
         program = st.number_input('Program number', min_value=1, max_value=12, value=1)
         distance = st.number_input('Distance (meters)', min_value=1, max_value=5000, value=1600, step=100)
@@ -2294,6 +2409,7 @@ def _rf_templates_page(owner_id):
         st.info('No race templates registered yet.')
     _rf_venue_existing_editor(owner_id)
     _rt_manage(owner_id)
+
 
 
 
@@ -6766,10 +6882,19 @@ def main():
         return
     st.sidebar.title('Horse Checklist App')
     st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
-    page = st.sidebar.radio('Menu', ['Checklist Review', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog'], key='app_navigation_page')
+    page = st.sidebar.radio('Menu', ['Checklist Review', 'Monthly Jockey Prize', 'Monthly Horse Owner Prize', 'Monthly Trainer Prize', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog'], key='app_navigation_page')
     if st.sidebar.button('Logout'):
         _persistent_login_logout()
         st.rerun()
+    if page == 'Monthly Trainer Prize':
+        _mc_page('trainer')
+        return
+    if page == 'Monthly Jockey Prize':
+        _mc_page('jockey')
+        return
+    if page == 'Monthly Horse Owner Prize':
+        _mc_page('owner')
+        return
     if page == 'Race Templates':
         _rf_templates_page(st.session_state.user_id)
         return
@@ -6803,6 +6928,8 @@ def main():
         render_template_page('race_name', 'Race Names', 'Race Name')
     elif page == 'Criteria':
         render_template_page('criteria', 'Criteria', 'Criteria Name')
+
+
 
 
 
