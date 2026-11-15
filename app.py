@@ -42,6 +42,174 @@ _RF_UNSET = object()
 
 # RACE_BLOG_VISIBLE_LIST_PAGINATION_V1
 
+# CHECKLIST_REVIEW_NEW_REFERENCES_V1
+
+def _cru_tables():
+    return {
+        "horse_id": ("horses", "horse_name"),
+        "horse_owner_id": ("horse_owners", "horse_owner_name"),
+        "jockey_id": ("jockeys", "jockey_name"),
+        "previous_jockey_id": ("jockeys", "jockey_name"),
+        "trainer_id": ("trainers", "trainer_name"),
+        "breeding_farm_id": ("breeding_farms", "breeding_farm_name"),
+        "stallion_id": ("stallions", "stallion_name"),
+        "broodmare_sire_id": ("stallions", "stallion_name"),
+        "venue_id": ("venues", "venue_name"),
+        "previous_venue_id": ("venues", "venue_name"),
+        "race_name_id": ("race_names", "race_name"),
+        "race_class_id": ("race_classes", "race_class_name"),
+    }
+
+
+def _cru_new_key(owner_id, entry_id, field):
+    return f"cru_new_{owner_id}_{entry_id}_{field}"
+
+
+def _cru_input(owner_id, entry_id, field, label):
+    return st.text_input(
+        "New " + label + " (optional)",
+        max_chars=200,
+        key=_cru_new_key(owner_id, entry_id, field),
+        help=(
+            "Leave blank to use the selection above. "
+            "A new name takes priority and is registered "
+            "when Update Checklist succeeds."
+        ),
+    )
+
+
+def _cru_mark_clear(owner_id, entry_id):
+    st.session_state[
+        f"cru_clear_{owner_id}_{entry_id}"
+    ] = True
+
+
+def _cru_prepare(owner_id, entry_id, widget_keys):
+    clear_key = f"cru_clear_{owner_id}_{entry_id}"
+
+    if st.session_state.pop(clear_key, False):
+        for field in _cru_tables():
+            st.session_state.pop(
+                _cru_new_key(owner_id, entry_id, field),
+                None,
+            )
+
+        # Reset keyed reference selectors before they are rendered.
+        # New reference items can change their option indexes.
+        for key in widget_keys:
+            st.session_state.pop(key, None)
+
+
+def _cru_clear_for_template(owner_id, entry_id, values):
+    # Loading a template should not be overridden by stale text
+    # previously typed into the race-name or venue fields.
+    for editor_field, field in (
+        ("edit_race_idx", "race_name_id"),
+        ("edit_venue_idx", "venue_id"),
+    ):
+        if editor_field in values:
+            st.session_state[
+                _cru_new_key(owner_id, entry_id, field)
+            ] = ""
+
+    st.session_state[
+        _cru_new_key(owner_id, entry_id, "race_class_id")
+    ] = ""
+
+
+def _cru_resolve(
+    cursor,
+    owner_id,
+    checklist_id,
+    changes,
+    current,
+):
+    if changes is None:
+        return current
+
+    if (
+        not isinstance(changes, dict)
+        or set(changes) - set(current)
+    ):
+        raise ValueError("Invalid new-reference fields.")
+
+    if any(
+        not isinstance(value, str)
+        for value in changes.values()
+    ):
+        raise ValueError(
+            "New reference names must be text."
+        )
+
+    if not any(
+        value.strip()
+        for value in changes.values()
+    ):
+        return current
+
+    if not cursor.execute(
+        "SELECT 1 FROM checklists "
+        "WHERE owner_id=? AND id=?",
+        (owner_id, checklist_id),
+    ).fetchone():
+        raise ValueError(
+            "Checklist is unavailable for this account."
+        )
+
+    result = dict(current)
+    cache = {}
+
+    for field, value in changes.items():
+        name = value.strip()
+
+        if not name:
+            continue
+
+        if len(name) > 200:
+            raise ValueError(
+                "New reference names must be "
+                "200 characters or fewer."
+            )
+
+        # Table/column names come only from this fixed whitelist.
+        table, column = _cru_tables()[field]
+
+        if table not in cache:
+            rows = cursor.execute(
+                f"SELECT id,{column} FROM {table} "
+                "WHERE owner_id=? ORDER BY id",
+                (owner_id,),
+            ).fetchall()
+
+            cache[table] = {}
+
+            for row in rows:
+                normalized = (
+                    str(row[column]).strip().casefold()
+                )
+
+                cache[table].setdefault(
+                    normalized,
+                    row["id"],
+                )
+
+        normalized = name.casefold()
+        item_id = cache[table].get(normalized)
+
+        if item_id is None:
+            cursor.execute(
+                f"INSERT INTO {table}(owner_id,{column}) "
+                "VALUES (?,?)",
+                (owner_id, name),
+            )
+
+            item_id = cursor.lastrowid
+            cache[table][normalized] = item_id
+
+        result[field] = item_id
+
+    return result
+
 def _rbl_move(owner_id, amount, total_pages):
     key = f"rbl_page_{owner_id}"
     current = int(st.session_state.get(key, 1) or 1)
@@ -1666,27 +1834,27 @@ def _rf_venue_editor_widget(widget_function,*args,**kwargs):
     return widget_function(*args,**kwargs)
 
 
-def _rf_venue_load_editor(owner_id,entry_id,template_id):
+def _rf_venue_load_editor(owner_id, entry_id, template_id):
     try:
-        if not _rf_rows("SELECT id FROM checklists WHERE owner_id=? AND id=?",(owner_id,entry_id)):
-            raise ValueError("Checklist is unavailable.")
-        row=_rf_template(owner_id,template_id)
-        race_ids=[None]+[r["id"] for r in get_user_race_names(owner_id)]
-        venue_ids=[None]+[r["id"] for r in get_user_venues(owner_id)]
-        values={"edit_race_idx":race_ids.index(row["race_name_id"]),
-            "edit_distance":row["distance"],"edit_date":date.fromisoformat(row["race_date"]),
-            "edit_program_number":row["program_number"],"edit_number_of_horses":row["number_of_horses"]}
-        if row.get("venue_id") is not None:
-            values["edit_venue_idx"]=venue_ids.index(row["venue_id"])
-        for field,value in values.items():
-            st.session_state[_rf_venue_editor_key(owner_id,entry_id,field)]=value
-        st.session_state[f"rf_editor_class_{owner_id}_{entry_id}"]=row["race_class_id"]
-        message="Loaded into editor: "+_rf_label(row)+". Click Update Checklist to save."
-        if row.get("venue_id") is None:
-            message+=" The existing venue was left unchanged."
-        st.session_state[f"rf_venue_editor_notice_{owner_id}_{entry_id}"]=message
-    except (ValueError,sqlite3.Error) as error:
-        st.session_state[f"rf_venue_editor_error_{owner_id}_{entry_id}"]=str(error)
+        if not _rf_rows('SELECT id FROM checklists WHERE owner_id=? AND id=?', (owner_id, entry_id)):
+            raise ValueError('Checklist is unavailable.')
+        row = _rf_template(owner_id, template_id)
+        race_ids = [None] + [r['id'] for r in get_user_race_names(owner_id)]
+        venue_ids = [None] + [r['id'] for r in get_user_venues(owner_id)]
+        values = {'edit_race_idx': race_ids.index(row['race_name_id']), 'edit_distance': row['distance'], 'edit_date': date.fromisoformat(row['race_date']), 'edit_program_number': row['program_number'], 'edit_number_of_horses': row['number_of_horses']}
+        if row.get('venue_id') is not None:
+            values['edit_venue_idx'] = venue_ids.index(row['venue_id'])
+        for field, value in values.items():
+            st.session_state[_rf_venue_editor_key(owner_id, entry_id, field)] = value
+        st.session_state[f'rf_editor_class_{owner_id}_{entry_id}'] = row['race_class_id']
+        _cru_clear_for_template(owner_id, entry_id, values)
+        message = 'Loaded into editor: ' + _rf_label(row) + '. Click Update Checklist to save.'
+        if row.get('venue_id') is None:
+            message += ' The existing venue was left unchanged.'
+        st.session_state[f'rf_venue_editor_notice_{owner_id}_{entry_id}'] = message
+    except (ValueError, sqlite3.Error) as error:
+        st.session_state[f'rf_venue_editor_error_{owner_id}_{entry_id}'] = str(error)
+
 
 
 def _rf_venue_editor_loader(owner_id,entry):
@@ -3429,7 +3597,7 @@ def add_checklist(owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey
 
 
 
-def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, date_of_race, previous_race_date, weight_change, memo, finished_place, program_number, number_of_horses, odds, prize, checklist_data, bracket_number=None, horse_number=None, horse_weight=None, *, race_class_id=_RF_UNSET):
+def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, date_of_race, previous_race_date, weight_change, memo, finished_place, program_number, number_of_horses, odds, prize, checklist_data, bracket_number=None, horse_number=None, horse_weight=None, *, race_class_id=_RF_UNSET, _review_new_references=None):
     race_class_id = _rf_resolve_class(owner_id, checklist_id, race_class_id)
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -3440,6 +3608,19 @@ def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id
             return (False, 'Date of race is required.')
         if normalized_previous_race_date and calculate_interval_days(normalized_date_of_race, normalized_previous_race_date) is None:
             return (False, 'Previous race date cannot be after the current race date.')
+        _cru_ids = _cru_resolve(cursor, owner_id, checklist_id, _review_new_references, {'horse_id': horse_id, 'horse_owner_id': horse_owner_id, 'jockey_id': jockey_id, 'previous_jockey_id': previous_jockey_id, 'trainer_id': trainer_id, 'breeding_farm_id': breeding_farm_id, 'stallion_id': stallion_id, 'broodmare_sire_id': broodmare_sire_id, 'venue_id': venue_id, 'previous_venue_id': previous_venue_id, 'race_name_id': race_name_id, 'race_class_id': race_class_id})
+        horse_id = _cru_ids['horse_id']
+        horse_owner_id = _cru_ids['horse_owner_id']
+        jockey_id = _cru_ids['jockey_id']
+        previous_jockey_id = _cru_ids['previous_jockey_id']
+        trainer_id = _cru_ids['trainer_id']
+        breeding_farm_id = _cru_ids['breeding_farm_id']
+        stallion_id = _cru_ids['stallion_id']
+        broodmare_sire_id = _cru_ids['broodmare_sire_id']
+        venue_id = _cru_ids['venue_id']
+        previous_venue_id = _cru_ids['previous_venue_id']
+        race_name_id = _cru_ids['race_name_id']
+        race_class_id = _cru_ids['race_class_id']
         if horse_id is not None:
             cursor.execute('\n                SELECT id\n                FROM checklists\n                WHERE owner_id = ?\n                  AND horse_id = ?\n                  AND date_of_race = ?\n                  AND id != ?\n                ', (owner_id, horse_id, normalized_date_of_race, checklist_id))
             if cursor.fetchone():
@@ -3449,6 +3630,9 @@ def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id
         cursor.execute('\n            UPDATE checklists\n            SET\n                horse_id = ?,\n                horse_owner_id = ?,\n                jockey_id = ?,\n                previous_jockey_id = ?,\n                trainer_id = ?,\n                breeding_farm_id = ?,\n                stallion_id = ?,\n                broodmare_sire_id = ?,\n                venue_id = ?,\n                previous_venue_id = ?,\n                race_name_id = ?,\n                distance = ?,\n                previous_distance = ?,\n                date_of_race = ?,\n                previous_race_date = ?,\n                interval_days = ?,\n                weight_change = ?,\n                memo = ?,\n                finished_place = ?,\n                checklist = ?,\n                program_number = ?,\n                number_of_horses = ?,\n                odds = ?,\n                prize = ?,\n                bracket_number = ?,\n                horse_number = ?,\n                horse_weight = ?, race_class_id=? WHERE id = ? AND owner_id = ?\n            ', (horse_id, horse_owner_id, jockey_id, previous_jockey_id, trainer_id, breeding_farm_id, stallion_id, broodmare_sire_id, venue_id, previous_venue_id, race_name_id, distance, previous_distance, normalized_date_of_race, normalized_previous_race_date, interval_days, weight_change, memo, finished_place, checklist_json, program_number, number_of_horses, odds, prize, bracket_number, horse_number, horse_weight, race_class_id, checklist_id, owner_id))
         conn.commit()
         return (True, 'Checklist updated!')
+    except ValueError as error:
+        conn.rollback()
+        return (False, str(error))
     except sqlite3.IntegrityError:
         return (False, 'Another checklist for this horse and race date is already registered.')
     except sqlite3.Error as error:
@@ -3456,6 +3640,7 @@ def update_checklist(checklist_id, owner_id, horse_id, horse_owner_id, jockey_id
         return (False, f'Database error: {error}')
     finally:
         conn.close()
+
 
 
 
@@ -4759,6 +4944,7 @@ def _review_editor_weight_value(
     return existing_weight
 
 def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trainers, breeding_farms, stallions, venues, race_names, criteria):
+    _cru_prepare(owner_id, entry['id'], [_rf_venue_editor_key(owner_id, entry['id'], 'edit_venue_idx'), _rf_venue_editor_key(owner_id, entry['id'], 'edit_race_idx'), f"rf_editor_class_{owner_id}_{entry['id']}"])
     st.subheader(f"Edit Checklist #{entry['id']}")
     horse_options, horse_ids = make_options(horses, 'horse_name')
     horse_owner_options, horse_owner_ids = make_options(horse_owners, 'horse_owner_name')
@@ -4776,17 +4962,29 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
     _rf_venue_editor_loader(owner_id, entry)
     with st.form(f"edit_checklist_form_{entry['id']}"):
         edit_horse_idx = st.selectbox('Horse', range(len(horse_options)), index=selected_index(horse_ids, entry.get('horse_id')), format_func=lambda i: horse_options[i])
+        cru_new_horse_id = _cru_input(owner_id, entry['id'], 'horse_id', 'Horse')
         edit_horse_owner_idx = st.selectbox('Horse Owner', range(len(horse_owner_options)), index=selected_index(horse_owner_ids, entry.get('horse_owner_id')), format_func=lambda i: horse_owner_options[i])
+        cru_new_horse_owner_id = _cru_input(owner_id, entry['id'], 'horse_owner_id', 'Horse Owner')
         edit_jockey_idx = st.selectbox('Jockey', range(len(jockey_options)), index=selected_index(jockey_ids, entry.get('jockey_id')), format_func=lambda i: jockey_options[i])
+        cru_new_jockey_id = _cru_input(owner_id, entry['id'], 'jockey_id', 'Jockey')
         edit_previous_jockey_idx = st.selectbox('Previous Jockey', range(len(jockey_options)), index=selected_index(jockey_ids, entry.get('previous_jockey_id')), format_func=lambda i: jockey_options[i])
+        cru_new_previous_jockey_id = _cru_input(owner_id, entry['id'], 'previous_jockey_id', 'Previous Jockey')
         edit_trainer_idx = st.selectbox('Trainer', range(len(trainer_options)), index=selected_index(trainer_ids, entry.get('trainer_id')), format_func=lambda i: trainer_options[i])
+        cru_new_trainer_id = _cru_input(owner_id, entry['id'], 'trainer_id', 'Trainer')
         edit_breeding_farm_idx = st.selectbox('Breeding Farm', range(len(breeding_farm_options)), index=selected_index(breeding_farm_ids, entry.get('breeding_farm_id')), format_func=lambda i: breeding_farm_options[i])
+        cru_new_breeding_farm_id = _cru_input(owner_id, entry['id'], 'breeding_farm_id', 'Breeding Farm')
         edit_stallion_idx = st.selectbox('Stallion', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('stallion_id')), format_func=lambda i: stallion_options[i])
+        cru_new_stallion_id = _cru_input(owner_id, entry['id'], 'stallion_id', 'Stallion')
         edit_broodmare_sire_idx = st.selectbox('Broodmare Sire', range(len(stallion_options)), index=selected_index(stallion_ids, entry.get('broodmare_sire_id')), format_func=lambda i: stallion_options[i])
+        cru_new_broodmare_sire_id = _cru_input(owner_id, entry['id'], 'broodmare_sire_id', 'Broodmare Sire')
         edit_venue_idx = _rf_venue_editor_widget(st.selectbox, 'Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('venue_id')), format_func=lambda i: venue_options[i], key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_venue_idx'))
+        cru_new_venue_id = _cru_input(owner_id, entry['id'], 'venue_id', 'Venue')
         edit_previous_venue_idx = st.selectbox('Previous Venue', range(len(venue_options)), index=selected_index(venue_ids, entry.get('previous_venue_id')), format_func=lambda i: venue_options[i])
+        cru_new_previous_venue_id = _cru_input(owner_id, entry['id'], 'previous_venue_id', 'Previous Venue')
         edit_race_idx = _rf_venue_editor_widget(st.selectbox, 'Race Name', range(len(race_options)), index=selected_index(race_ids, entry.get('race_name_id')), format_func=lambda i: race_options[i], key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_race_idx'))
+        cru_new_race_name_id = _cru_input(owner_id, entry['id'], 'race_name_id', 'Race Name')
         rf_editor_class_id = _rf_class_select(owner_id, f"rf_editor_class_{owner_id}_{entry['id']}", entry.get('race_class_id'))
+        cru_new_race_class_id = _cru_input(owner_id, entry['id'], 'race_class_id', 'Race Class')
         edit_distance = _rf_venue_editor_widget(st.number_input, 'Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('distance') or 0), step=100, key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_distance'))
         edit_previous_distance = st.number_input('Previous Distance (meters)', min_value=0, max_value=5000, value=int(entry.get('previous_distance') or 0), step=100)
         edit_date = _rf_venue_editor_widget(st.date_input, 'Date of Race', value=existing_date, key=_rf_venue_editor_key(owner_id, entry['id'], 'edit_date'))
@@ -4825,10 +5023,11 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
             st.error('Previous race date cannot be after the current race date.')
             return
         _review_update_filter_snapshot = _capture_review_update_filter_state(owner_id)
-        success, message = update_checklist(checklist_id=entry['id'], owner_id=owner_id, horse_id=get_selected_id(horse_ids, edit_horse_idx), horse_owner_id=get_selected_id(horse_owner_ids, edit_horse_owner_idx), jockey_id=get_selected_id(jockey_ids, edit_jockey_idx), previous_jockey_id=get_selected_id(jockey_ids, edit_previous_jockey_idx), trainer_id=get_selected_id(trainer_ids, edit_trainer_idx), breeding_farm_id=get_selected_id(breeding_farm_ids, edit_breeding_farm_idx), stallion_id=get_selected_id(stallion_ids, edit_stallion_idx), broodmare_sire_id=get_selected_id(stallion_ids, edit_broodmare_sire_idx), venue_id=get_selected_id(venue_ids, edit_venue_idx), previous_venue_id=get_selected_id(venue_ids, edit_previous_venue_idx), race_name_id=get_selected_id(race_ids, edit_race_idx), distance=to_optional_int(edit_distance), previous_distance=to_optional_int(edit_previous_distance), date_of_race=normalized_edit_date, previous_race_date=normalized_edit_previous_race_date, weight_change=to_optional_signed_float(edit_weight_change), memo=clean_text(edit_memo), finished_place=clean_text(edit_finished_place), program_number=to_optional_int(edit_program_number), number_of_horses=to_optional_int(edit_number_of_horses), odds=to_optional_float(edit_odds), prize=to_optional_float(edit_prize), checklist_data=edit_checklist_data if any(edit_checklist_data.values()) else None, bracket_number=to_optional_int(edit_bracket_number), horse_number=to_optional_int(edit_horse_number), horse_weight=_review_editor_weight_value(edit_horse_weight, entry.get('horse_weight'), clear_stored_horse_weight), race_class_id=rf_editor_class_id)
+        success, message = update_checklist(checklist_id=entry['id'], owner_id=owner_id, horse_id=get_selected_id(horse_ids, edit_horse_idx), horse_owner_id=get_selected_id(horse_owner_ids, edit_horse_owner_idx), jockey_id=get_selected_id(jockey_ids, edit_jockey_idx), previous_jockey_id=get_selected_id(jockey_ids, edit_previous_jockey_idx), trainer_id=get_selected_id(trainer_ids, edit_trainer_idx), breeding_farm_id=get_selected_id(breeding_farm_ids, edit_breeding_farm_idx), stallion_id=get_selected_id(stallion_ids, edit_stallion_idx), broodmare_sire_id=get_selected_id(stallion_ids, edit_broodmare_sire_idx), venue_id=get_selected_id(venue_ids, edit_venue_idx), previous_venue_id=get_selected_id(venue_ids, edit_previous_venue_idx), race_name_id=get_selected_id(race_ids, edit_race_idx), distance=to_optional_int(edit_distance), previous_distance=to_optional_int(edit_previous_distance), date_of_race=normalized_edit_date, previous_race_date=normalized_edit_previous_race_date, weight_change=to_optional_signed_float(edit_weight_change), memo=clean_text(edit_memo), finished_place=clean_text(edit_finished_place), program_number=to_optional_int(edit_program_number), number_of_horses=to_optional_int(edit_number_of_horses), odds=to_optional_float(edit_odds), prize=to_optional_float(edit_prize), checklist_data=edit_checklist_data if any(edit_checklist_data.values()) else None, bracket_number=to_optional_int(edit_bracket_number), horse_number=to_optional_int(edit_horse_number), horse_weight=_review_editor_weight_value(edit_horse_weight, entry.get('horse_weight'), clear_stored_horse_weight), race_class_id=rf_editor_class_id, _review_new_references={'horse_id': cru_new_horse_id, 'horse_owner_id': cru_new_horse_owner_id, 'jockey_id': cru_new_jockey_id, 'previous_jockey_id': cru_new_previous_jockey_id, 'trainer_id': cru_new_trainer_id, 'breeding_farm_id': cru_new_breeding_farm_id, 'stallion_id': cru_new_stallion_id, 'broodmare_sire_id': cru_new_broodmare_sire_id, 'venue_id': cru_new_venue_id, 'previous_venue_id': cru_new_previous_venue_id, 'race_name_id': cru_new_race_name_id, 'race_class_id': cru_new_race_class_id})
         if success:
             st.success(message)
             _queue_review_update_filter_restore(owner_id, _review_update_filter_snapshot)
+            _cru_mark_clear(owner_id, entry['id'])
             st.rerun()
         else:
             st.error(message)
@@ -4840,6 +5039,7 @@ def render_checklist_editor(entry, owner_id, horses, horse_owners, jockeys, trai
             st.rerun()
         else:
             st.error(message)
+
 
 
 
