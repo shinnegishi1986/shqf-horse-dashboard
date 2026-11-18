@@ -7158,6 +7158,136 @@ def _sfi_page_number_input(*args, **kwargs):
         **bound.kwargs,
     )
 
+# SHIN2_USER_ADMIN_V1
+_SHIN2_ADMIN_PAGE = "User Administration"
+
+
+def _shin2_is_admin(conn):
+    owner_id = st.session_state.get("user_id")
+    if not st.session_state.get("logged_in") or owner_id is None:
+        return False
+
+    return conn.execute(
+        "SELECT 1 FROM users WHERE id = ? AND username COLLATE BINARY = ?",
+        (owner_id, "shin2"),
+    ).fetchone() is not None
+
+
+def _shin2_admin_options(options):
+    from contextlib import closing
+
+    pages = list(options)
+    with closing(get_db_connection()) as conn:
+        allowed = _shin2_is_admin(conn)
+
+    if allowed:
+        pages.append(_SHIN2_ADMIN_PAGE)
+    elif st.session_state.get("app_navigation_page") == _SHIN2_ADMIN_PAGE:
+        st.session_state.pop("app_navigation_page", None)
+    return pages
+
+
+def _shin2_issue_invitation():
+    from contextlib import closing
+    import secrets
+
+    with closing(get_db_connection()) as conn, conn:
+        if not _shin2_is_admin(conn):
+            raise PermissionError("Administrator access required.")
+
+        for _ in range(5):
+            code = secrets.token_urlsafe(24)
+            result = conn.execute(
+                "INSERT INTO invitation_codes (code, used) VALUES (?, 0) "
+                "ON CONFLICT(code) DO NOTHING",
+                (code,),
+            )
+            if result.rowcount == 1:
+                return code
+
+    raise RuntimeError("Could not generate a unique invitation code. Try again.")
+
+
+def _shin2_create_user(username, display_name, password):
+    from contextlib import closing
+    import bcrypt
+
+    username = username.strip()
+    display_name = display_name.strip()
+    if not username or not display_name:
+        raise ValueError("Enter both a username and a display name.")
+    if len(username) > 64 or len(display_name) > 120:
+        raise ValueError("Use at most 64 characters for the username and 120 for the display name.")
+    if any(ord(char) < 32 or ord(char) == 127 for char in username + display_name):
+        raise ValueError("Username and display name cannot contain control characters.")
+    if username.casefold() == "shin2":
+        raise ValueError("That username is reserved.")
+
+    password_bytes = password.encode("utf-8")
+    if len(password) < 12 or len(password_bytes) > 72 or "\x00" in password:
+        raise ValueError("Use at least 12 characters and at most 72 UTF-8 bytes, with no null characters.")
+
+    with closing(get_db_connection()) as conn, conn:
+        if not _shin2_is_admin(conn):
+            raise PermissionError("Administrator access required.")
+
+        hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("ascii")
+        result = conn.execute(
+            "INSERT INTO users (username, display_name, password) VALUES (?, ?, ?) "
+            "ON CONFLICT(username) DO NOTHING",
+            (username, display_name, hashed),
+        )
+        if result.rowcount != 1:
+            raise ValueError("That username is already registered.")
+
+
+def _shin2_render_user_admin():
+    from contextlib import closing
+    import sqlite3
+
+    with closing(get_db_connection()) as conn:
+        if not _shin2_is_admin(conn):
+            st.error("Administrator access required.")
+            return
+
+    st.header(_SHIN2_ADMIN_PAGE)
+    invitation_tab, account_tab = st.tabs(["Invitation codes", "Create user"])
+
+    with invitation_tab:
+        st.caption("Each code can be used once on the Register tab.")
+        if st.button("Issue invitation code", key="shin2_issue_invitation"):
+            try:
+                code = _shin2_issue_invitation()
+            except (PermissionError, RuntimeError) as error:
+                st.error(str(error))
+            except sqlite3.Error:
+                st.error("The invitation code could not be saved. Try again.")
+            else:
+                st.success("Invitation code issued. Copy it now; it is shown only on this run.")
+                st.code(code, language=None)
+
+    with account_tab:
+        st.caption("Accounts created here sign in directly on the Login tab.")
+        with st.form("shin2_create_user", clear_on_submit=True):
+            username = st.text_input("Username")
+            display_name = st.text_input("Display name")
+            password = st.text_input("Password", type="password")
+            confirm = st.text_input("Confirm password", type="password")
+            submit = st.form_submit_button("Create user")
+
+        if submit:
+            if password != confirm:
+                st.error("The passwords do not match.")
+                return
+            try:
+                _shin2_create_user(username, display_name, password)
+            except (PermissionError, ValueError) as error:
+                st.error(str(error))
+            except sqlite3.Error:
+                st.error("The account could not be saved. Try again.")
+            else:
+                st.success("Account created. The user can now sign in without an invitation code.")
+
 def main():
     _review_was_logged_in = bool(st.session_state.get('logged_in', False))
     st.session_state.setdefault('app_navigation_page', 'Checklist Review')
@@ -7172,10 +7302,13 @@ def main():
         return
     st.sidebar.title('Horse Checklist App')
     st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
-    page = _hcm_menu('Menu', ['Checklist Review', 'Monthly Jockey Prize', 'Monthly Horse Owner Prize', 'Monthly Trainer Prize', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog', 'Prize a Month — Stallions', 'Prize a Month — Breeding Farms', 'Prize a Month — Checklist Criteria'], key='app_navigation_page')
+    page = _hcm_menu('Menu', _shin2_admin_options(['Checklist Review', 'Monthly Jockey Prize', 'Monthly Horse Owner Prize', 'Monthly Trainer Prize', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog', 'Prize a Month — Stallions', 'Prize a Month — Breeding Farms', 'Prize a Month — Checklist Criteria']), key='app_navigation_page')
     if st.sidebar.button('Logout'):
         _persistent_login_logout()
         st.rerun()
+    if page == _SHIN2_ADMIN_PAGE:
+        _shin2_render_user_admin()
+        return
     if page in {'Prize a Month — Stallions': 'stallion', 'Prize a Month — Breeding Farms': 'breedingfarm', 'Prize a Month — Checklist Criteria': 'criteria'}:
         _mpx_page({'Prize a Month — Stallions': 'stallion', 'Prize a Month — Breeding Farms': 'breedingfarm', 'Prize a Month — Checklist Criteria': 'criteria'}[page])
         return
