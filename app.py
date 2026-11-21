@@ -2789,14 +2789,226 @@ def format_yen(value):
     return f"¥{value:,.0f}"
 
 
+# CHECKLIST_PAGING_NONE_FIX_V2
+
+def _hcfp_int(value, default=1):
+    import math
+
+    try:
+        if isinstance(value, bool):
+            return int(default)
+
+        number = float(value)
+
+        return (
+            int(number)
+            if math.isfinite(number)
+            else int(default)
+        )
+
+    except (TypeError, ValueError, OverflowError):
+        return int(default)
+
+
+def _hcfp_page(value, total_pages, fallback=1):
+    maximum = max(
+        1,
+        _hcfp_int(total_pages, 1),
+    )
+
+    return min(
+        maximum,
+        max(
+            1,
+            _hcfp_int(
+                value,
+                _hcfp_int(fallback, 1),
+            ),
+        ),
+    )
+
+
+def _hcfp_prepare_state(owner_id, total_pages):
+    logical_key = saved_filter_key(
+        owner_id,
+        "page_number",
+    )
+
+    input_key = saved_filter_key(
+        owner_id,
+        "page_number_input",
+    )
+
+    logical = _hcfp_page(
+        st.session_state.get(logical_key),
+        total_pages,
+    )
+
+    # This is the backing pagination value, not the widget key.
+    st.session_state[logical_key] = logical
+
+    # Only normalize an existing widget value before it is rendered.
+    if input_key in st.session_state:
+        current = st.session_state[input_key]
+
+        normalized = _hcfp_page(
+            current,
+            total_pages,
+            logical,
+        )
+
+        if (
+            type(current) is not int
+            or current != normalized
+        ):
+            st.session_state[input_key] = normalized
+
+
+def _hcfp_resolve_page(value, owner_id, total_pages):
+    logical = st.session_state.get(
+        saved_filter_key(
+            owner_id,
+            "page_number",
+        ),
+        1,
+    )
+
+    widget = st.session_state.get(
+        saved_filter_key(
+            owner_id,
+            "page_number_input",
+        )
+    )
+
+    fallback = _hcfp_page(
+        widget,
+        total_pages,
+        logical,
+    )
+
+    return _hcfp_page(
+        value,
+        total_pages,
+        fallback,
+    )
+
+
+def _hcfp_number_input(*args, **kwargs):
+    import inspect
+
+    bound = inspect.signature(
+        st.number_input
+    ).bind_partial(*args, **kwargs)
+
+    key = bound.arguments.get("key")
+    minimum = bound.arguments.get("min_value")
+    maximum = bound.arguments.get("max_value")
+
+    default = bound.arguments.get(
+        "value",
+        minimum,
+    )
+
+    fallback = _hcfp_int(
+        default,
+        _hcfp_int(minimum, 1),
+    )
+
+    candidate = (
+        st.session_state.get(key, fallback)
+        if key is not None
+        else fallback
+    )
+
+    candidate = _hcfp_int(
+        candidate,
+        fallback,
+    )
+
+    if minimum is not None:
+        candidate = max(
+            int(minimum),
+            candidate,
+        )
+
+    if maximum is not None:
+        candidate = min(
+            int(maximum),
+            candidate,
+        )
+
+    if key is not None and key in st.session_state:
+        current = st.session_state[key]
+
+        if (
+            type(current) is not int
+            or current != candidate
+        ):
+            st.session_state[key] = candidate
+
+        # Session State provides the current value.
+        # Avoid declaring a competing widget default.
+        bound.arguments["value"] = None
+
+    result = st.number_input(
+        *bound.args,
+        **bound.kwargs,
+    )
+
+    # An empty widget must never propagate None to pagination.
+    # Do not modify the widget's Session State after rendering.
+    result = _hcfp_int(
+        result,
+        candidate,
+    )
+
+    if minimum is not None:
+        result = max(
+            int(minimum),
+            result,
+        )
+
+    if maximum is not None:
+        result = min(
+            int(maximum),
+            result,
+        )
+
+    return result
+
+
 def get_paginated_items(items, page_number, page_size):
-    if page_size <= 0:
+    if (
+        isinstance(page_size, str)
+        and page_size.strip().casefold() == "show all"
+    ):
         return items
 
-    start_index = (page_number - 1) * page_size
-    end_index = start_index + page_size
+    size = _hcfp_int(
+        page_size,
+        50,
+    )
 
-    return items[start_index:end_index]
+    # Preserve the existing nonpositive-size "show all" behavior.
+    if size <= 0:
+        return items
+
+    total_pages = max(
+        1,
+        (len(items) + size - 1) // size,
+    )
+
+    page = _hcfp_page(
+        page_number,
+        total_pages,
+    )
+
+    start_index = (page - 1) * size
+
+    return items[
+        start_index:start_index + size
+    ]
+
 
 
 # -------------------------------------------------
@@ -6482,7 +6694,9 @@ def render_checklist_review_page():
             page_size = int(selected_page_size)
         total_pages = max(1, (total_results + page_size - 1) // page_size)
         with display_col2:
-            current_page = _review_stable_numeric_filter_input(_sfi_page_number_input, owner_id, 'Page', min_value=1, max_value=total_pages, value=min(int(st.session_state.get(saved_filter_key(owner_id, 'page_number'), 1)), total_pages), step=1, key=saved_filter_key(owner_id, 'page_number_input'))
+            _hcfp_prepare_state(owner_id, total_pages)
+            current_page = _review_stable_numeric_filter_input(_hcfp_number_input, owner_id, 'Page', min_value=1, max_value=total_pages, value=min(int(st.session_state.get(saved_filter_key(owner_id, 'page_number'), 1)), total_pages), step=1, key=saved_filter_key(owner_id, 'page_number_input'))
+            current_page = _hcfp_resolve_page(current_page, owner_id, total_pages)
         st.session_state[saved_filter_key(owner_id, 'page_size')] = selected_page_size
         st.session_state[saved_filter_key(owner_id, 'page_number')] = current_page
         paginated_checklists = get_paginated_items(first_filtered_checklists, current_page, page_size)
@@ -6500,6 +6714,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
