@@ -4765,15 +4765,16 @@ def render_race_checklist_page():
     venue_options, venue_ids = make_options(venues, 'venue_name')
     race_options, race_ids = make_options(race_names, 'race_name')
     _rf_loader(owner_id, 'registration', {'selected_race_idx': registration_key('selected_race_idx') + '_accept_name', 'distance': registration_key('distance'), 'date_of_race': registration_key('date_of_race'), 'program_number': registration_key('program_number'), 'number_of_horses': registration_key('number_of_horses'), 'race_class_id': registration_key('race_class_id'), 'selected_venue_idx': registration_key('selected_venue_idx') + '_accept_name'})
+    _htc_checklist_loader(owner_id, {'horse': registration_key('selected_horse_idx') + '_accept_name', 'horse_owner': registration_key('selected_horse_owner_idx') + '_accept_name', 'breeding_farm': registration_key('selected_breeding_farm_idx') + '_accept_name', 'stallion': registration_key('selected_stallion_idx') + '_accept_name', 'broodmare_sire': registration_key('selected_broodmare_sire_idx') + '_accept_name', 'trainer': registration_key('selected_trainer_idx') + '_accept_name'})
     with st.container():
-        selected_horse_idx = render_race_reference_input('Select Horse (optional)', horse_options, key=registration_key('selected_horse_idx') + '_accept_name')
-        selected_horse_owner_idx = render_race_reference_input('Select Horse Owner (optional)', horse_owner_options, key=registration_key('selected_horse_owner_idx') + '_accept_name')
+        selected_horse_idx = _ht_horse_input('Select Horse (optional)', horse_options, key=registration_key('selected_horse_idx') + '_accept_name', target_keys={'horse_owner': registration_key('selected_horse_owner_idx') + '_accept_name', 'trainer': registration_key('selected_trainer_idx') + '_accept_name', 'stallion': registration_key('selected_stallion_idx') + '_accept_name', 'broodmare_sire': registration_key('selected_broodmare_sire_idx') + '_accept_name', 'breeding_farm': registration_key('selected_breeding_farm_idx') + '_accept_name'})
+        selected_horse_owner_idx = _ht_reference_input('Select Horse Owner (optional)', horse_owner_options, key=registration_key('selected_horse_owner_idx') + '_accept_name')
         selected_jockey_idx = render_race_reference_input('Select Jockey (optional)', jockey_options, key=registration_key('selected_jockey_idx') + '_accept_name')
         selected_previous_jockey_idx = render_race_reference_input('Select Previous Jockey (optional)', jockey_options, key=registration_key('selected_previous_jockey_idx') + '_accept_name')
-        selected_trainer_idx = render_race_reference_input('Select Trainer (optional)', trainer_options, key=registration_key('selected_trainer_idx') + '_accept_name')
-        selected_breeding_farm_idx = render_race_reference_input('Select Breeding Farm (optional)', breeding_farm_options, key=registration_key('selected_breeding_farm_idx') + '_accept_name')
-        selected_stallion_idx = render_race_reference_input('Select Stallion (optional)', stallion_options, key=registration_key('selected_stallion_idx') + '_accept_name')
-        selected_broodmare_sire_idx = render_race_reference_input('Select Broodmare Sire (optional)', stallion_options, key=registration_key('selected_broodmare_sire_idx') + '_accept_name')
+        selected_trainer_idx = _ht_reference_input('Select Trainer (optional)', trainer_options, key=registration_key('selected_trainer_idx') + '_accept_name')
+        selected_breeding_farm_idx = _ht_reference_input('Select Breeding Farm (optional)', breeding_farm_options, key=registration_key('selected_breeding_farm_idx') + '_accept_name')
+        selected_stallion_idx = _ht_reference_input('Select Stallion (optional)', stallion_options, key=registration_key('selected_stallion_idx') + '_accept_name')
+        selected_broodmare_sire_idx = _ht_reference_input('Select Broodmare Sire (optional)', stallion_options, key=registration_key('selected_broodmare_sire_idx') + '_accept_name')
         selected_venue_idx = render_race_reference_input('Select Venue (optional)', venue_options, key=registration_key('selected_venue_idx') + '_accept_name')
         selected_previous_venue_idx = render_race_reference_input('Select Previous Venue (optional)', venue_options, key=registration_key('selected_previous_venue_idx') + '_accept_name')
         selected_race_idx = render_race_reference_input('Select Race Name (optional)', race_options, key=registration_key('selected_race_idx') + '_accept_name')
@@ -4831,6 +4832,9 @@ def render_race_checklist_page():
             else:
                 st.error(message)
     render_batch_import_section(owner_id, criteria)
+
+
+
 
 
 
@@ -7503,6 +7507,643 @@ def _shin2_render_user_admin():
             else:
                 st.success("Account created. The user can now sign in without an invitation code.")
 
+# HORSE_PROFILE_TEMPLATES_V1
+
+# HORSE_TEMPLATE_BREEDING_FARM_V1
+_HT_FIELDS = {'horse': ('Horse', 'horses', 'horse_name'), 'horse_owner': ('Horse owner', 'horse_owners', 'horse_owner_name'), 'breeding_farm': ('Breeding farm', 'breeding_farms', 'breeding_farm_name'), 'stallion': ('Stallion', 'stallions', 'stallion_name'), 'broodmare_sire': ('Broodmare sire', 'stallions', 'stallion_name'), 'trainer': ('Trainer', 'trainers', 'trainer_name')}
+
+
+
+def _ht_owner():
+    owner = st.session_state.get("user_id")
+    if not st.session_state.get("logged_in") or owner is None:
+        raise PermissionError("Sign in to use horse templates.")
+    return owner
+
+
+def _ht_schema(conn):
+    conn.execute('\n        CREATE TABLE IF NOT EXISTS horse_profile_templates (\n            id INTEGER PRIMARY KEY AUTOINCREMENT,\n            owner_id INTEGER NOT NULL,\n            horse_id INTEGER NOT NULL,\n            horse_owner_id INTEGER,\n            stallion_id INTEGER,\n            broodmare_sire_id INTEGER,\n            trainer_id INTEGER,\n            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n            UNIQUE(owner_id, horse_id),\n            FOREIGN KEY(owner_id) REFERENCES users(id),\n            FOREIGN KEY(horse_id) REFERENCES horses(id),\n            FOREIGN KEY(horse_owner_id) REFERENCES horse_owners(id),\n            FOREIGN KEY(stallion_id) REFERENCES stallions(id),\n            FOREIGN KEY(broodmare_sire_id) REFERENCES stallions(id),\n            FOREIGN KEY(trainer_id) REFERENCES trainers(id)\n        )\n    ')
+    import sqlite3
+    columns = {row['name'] for row in conn.execute('PRAGMA table_info(horse_profile_templates)')}
+    if 'breeding_farm_id' not in columns:
+        try:
+            conn.execute('ALTER TABLE horse_profile_templates ADD COLUMN breeding_farm_id INTEGER REFERENCES breeding_farms(id)')
+        except sqlite3.OperationalError:
+            columns = {row['name'] for row in conn.execute('PRAGMA table_info(horse_profile_templates)')}
+            if 'breeding_farm_id' not in columns:
+                raise
+
+
+
+def _ht_names(conn, owner, profile):
+    result = {}
+
+    for field, (_, table, column) in _HT_FIELDS.items():
+        row = conn.execute(
+            f'SELECT "{column}" AS name FROM "{table}" '
+            'WHERE id = ? AND owner_id = ?',
+            (profile.get(field + "_id"), owner),
+        ).fetchone()
+
+        result[field] = (
+            str(row["name"]).strip()
+            if row and row["name"]
+            else ""
+        )
+
+    return result
+
+
+def _ht_reference(conn, owner, field, name):
+    name = str(name or "").strip()
+
+    if not name:
+        if field == "horse":
+            raise ValueError(
+                "Choose a horse or enter a new horse name."
+            )
+        return None
+
+    _, table, column = _HT_FIELDS[field]
+
+    rows = conn.execute(
+        f'SELECT id, "{column}" AS name FROM "{table}" '
+        'WHERE owner_id = ? ORDER BY id',
+        (owner,),
+    ).fetchall()
+
+    for row in rows:
+        if (
+            str(row["name"]).strip().casefold()
+            == name.casefold()
+        ):
+            return row["id"]
+
+    return conn.execute(
+        f'INSERT INTO "{table}" '
+        f'(owner_id, "{column}") VALUES (?, ?)',
+        (owner, name),
+    ).lastrowid
+
+
+def _ht_save(values, template_id=None):
+    from contextlib import closing
+
+    owner = _ht_owner()
+
+    with closing(get_db_connection()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _ht_schema(conn)
+
+        if template_id is not None:
+            existing = conn.execute(
+                "SELECT 1 FROM horse_profile_templates "
+                "WHERE id=? AND owner_id=?",
+                (template_id, owner),
+            ).fetchone()
+
+            if existing is None:
+                raise ValueError(
+                    "This horse template is no longer available."
+                )
+
+        fields = list(_HT_FIELDS)
+
+        ids = {
+            field: _ht_reference(
+                conn,
+                owner,
+                field,
+                values.get(field),
+            )
+            for field in fields
+        }
+
+        duplicate = conn.execute(
+            "SELECT id FROM horse_profile_templates "
+            "WHERE owner_id=? AND horse_id=?",
+            (owner, ids["horse"]),
+        ).fetchone()
+
+        if duplicate and duplicate["id"] != template_id:
+            raise ValueError(
+                "This horse already has a template. "
+                "Select that template to edit it."
+            )
+
+        columns = [
+            field + "_id"
+            for field in fields
+        ]
+
+        args = tuple(
+            ids[field]
+            for field in fields
+        )
+
+        if template_id is None:
+            placeholders = ", ".join(
+                "?"
+                for _ in range(len(columns) + 1)
+            )
+
+            return conn.execute(
+                "INSERT INTO horse_profile_templates ("
+                + ", ".join(columns + ["owner_id"])
+                + ") VALUES ("
+                + placeholders
+                + ")",
+                (*args, owner),
+            ).lastrowid
+
+        assignments = ", ".join(
+            column + "=?"
+            for column in columns
+        )
+
+        conn.execute(
+            "UPDATE horse_profile_templates SET "
+            + assignments
+            + ", updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND owner_id=?",
+            (*args, template_id, owner),
+        )
+
+        return template_id
+
+
+
+def _ht_delete(template_id):
+    from contextlib import closing
+
+    owner = _ht_owner()
+
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+
+        result = conn.execute(
+            "DELETE FROM horse_profile_templates "
+            "WHERE id = ? AND owner_id = ?",
+            (template_id, owner),
+        )
+
+        if result.rowcount != 1:
+            raise ValueError(
+                "This horse template is no longer available."
+            )
+
+
+def _ht_reference_input(label, existing_options, *, key):
+    import inspect
+
+    if (
+        "accept_new_options"
+        not in inspect.signature(st.selectbox).parameters
+    ):
+        st.error(
+            "Horse templates require Streamlit selectbox "
+            "support for accept_new_options. Update Streamlit."
+        )
+        st.stop()
+
+    names = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in existing_options[1:]
+            if value is not None
+            and str(value).strip()
+        )
+    )
+
+    selected = st.selectbox(
+        label,
+        names,
+        index=None,
+        key=key,
+        accept_new_options=True,
+        placeholder="Choose an existing name or type a new one",
+        help="New names are registered when you save.",
+    )
+
+    return (
+        str(selected).strip()
+        if selected is not None
+        else ""
+    )
+
+
+def _ht_horse_input(label, existing_options, *, key, target_keys):
+    from contextlib import closing
+    owner = _ht_owner()
+    selected = _ht_reference_input(label, existing_options, key=key)
+    profile = None
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+        if selected:
+            horses = conn.execute('SELECT id, horse_name FROM horses WHERE owner_id=? ORDER BY id', (owner,))
+            for horse in horses:
+                if str(horse['horse_name']).strip().casefold() == selected.casefold():
+                    row = conn.execute('SELECT * FROM horse_profile_templates WHERE owner_id=? AND horse_id=?', (owner, horse['id'])).fetchone()
+                    if row:
+                        profile = _ht_names(conn, owner, dict(row))
+                    break
+    last_key = f'ht_last_horse_{owner}'
+    previous = st.session_state.get(last_key)
+    current = (key, selected.casefold())
+    reload = False
+    if profile is not None:
+        reload = st.button('Apply horse template', key=f'{key}_apply_horse_template', help='Reload the saved owner, breeding farm, stallion, broodmare sire and trainer into this draft only.')
+    if previous != current or reload:
+        if profile is not None:
+            for field, widget_key in target_keys.items():
+                st.session_state[widget_key] = profile[field] or None
+        elif previous is not None and previous[1] != current[1]:
+            for widget_key in target_keys.values():
+                st.session_state[widget_key] = None
+        st.session_state[last_key] = current
+    return selected
+
+
+
+def _ht_menu_options(options):
+    pages = list(options)
+
+    if "Horse Templates" not in pages:
+        pages.append("Horse Templates")
+
+    return pages
+
+
+def _ht_page():
+    from contextlib import closing
+    import sqlite3
+
+    owner = _ht_owner()
+    prefix = f"horse_templates_{owner}_"
+
+    st.header("Horse Templates")
+
+    message = st.session_state.pop(
+        prefix + "message", None
+    )
+
+    if message:
+        st.success(message)
+
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+
+        profiles = {
+            row["id"]: dict(row)
+            for row in conn.execute(
+                "SELECT t.*, h.horse_name "
+                "FROM horse_profile_templates t "
+                "LEFT JOIN horses h "
+                "ON h.id=t.horse_id "
+                "AND h.owner_id=t.owner_id "
+                "WHERE t.owner_id=? "
+                "ORDER BY h.horse_name COLLATE NOCASE, t.id",
+                (owner,),
+            ).fetchall()
+        }
+
+        choices = {}
+
+        for field, (_, table, column) in _HT_FIELDS.items():
+            choices[field] = [
+                row["name"]
+                for row in conn.execute(
+                    f'SELECT "{column}" AS name '
+                    f'FROM "{table}" WHERE owner_id=? '
+                    f'ORDER BY "{column}" COLLATE NOCASE',
+                    (owner,),
+                ).fetchall()
+            ]
+
+    revision = st.session_state.get(
+        prefix + "revision", 0
+    )
+
+    select_key = prefix + f"select_{revision}"
+
+    if select_key not in st.session_state:
+        initial_selection = st.session_state.get(
+            prefix + "selected_id"
+        )
+
+        st.session_state[select_key] = (
+            initial_selection
+            if initial_selection in profiles
+            else None
+        )
+
+    selected = st.selectbox(
+        "Template",
+        [None] + list(profiles),
+        index=None,
+        key=select_key,
+        format_func=lambda item: (
+            "Create new template"
+            if item is None
+            else (
+                profiles[item]["horse_name"]
+                or f"Missing horse #{profiles[item]['horse_id']}"
+            )
+        ),
+        placeholder="Create new template",
+    )
+
+    st.session_state[prefix + "selected_id"] = selected
+
+    initial = {
+        field: ""
+        for field in _HT_FIELDS
+    }
+
+    if selected is not None:
+        with closing(get_db_connection()) as conn:
+            initial = _ht_names(
+                conn, owner, profiles[selected]
+            )
+
+    token = f"{revision}_{selected}"
+
+    with st.form(prefix + "form_" + token):
+        values = {}
+
+        for field, (label, _, _) in _HT_FIELDS.items():
+            field_key = (
+                prefix + token + "_" + field
+            )
+
+            if field_key not in st.session_state:
+                st.session_state[field_key] = (
+                    initial[field] or None
+                )
+
+            values[field] = _ht_reference_input(
+                label,
+                ["No selection"] + choices[field],
+                key=field_key,
+            )
+
+        save = st.form_submit_button(
+            "Save template",
+            type="primary",
+        )
+
+    if save:
+        try:
+            template_id = _ht_save(
+                values, selected
+            )
+
+        except ValueError as error:
+            st.error(str(error))
+
+        except sqlite3.Error:
+            st.error(
+                "Could not save the template. "
+                "No partial changes were committed."
+            )
+
+        else:
+            st.session_state[
+                prefix + "selected_id"
+            ] = template_id
+
+            st.session_state[
+                prefix + "revision"
+            ] = revision + 1
+
+            st.session_state[prefix + "message"] = (
+                "Horse template saved. "
+                "Existing checklists were not changed."
+            )
+
+            st.rerun()
+
+    if selected is not None:
+        confirmed = st.checkbox(
+            "Confirm template deletion",
+            key=prefix + "delete_confirm_" + token,
+            help=(
+                "Deletes only this template. "
+                "Registered horses, reference names "
+                "and existing checklists are kept."
+            ),
+        )
+
+        if st.button(
+            "Delete template",
+            key=prefix + "delete_" + token,
+            disabled=not confirmed,
+        ):
+            try:
+                _ht_delete(selected)
+
+            except ValueError as error:
+                st.error(str(error))
+
+            except sqlite3.Error:
+                st.error(
+                    "Could not delete the template."
+                )
+
+            else:
+                st.session_state[
+                    prefix + "selected_id"
+                ] = None
+
+                st.session_state[
+                    prefix + "revision"
+                ] = revision + 1
+
+                st.session_state[prefix + "message"] = (
+                    "Horse template deleted. "
+                    "Existing checklists were kept."
+                )
+
+                st.rerun()
+
+# HORSE_TEMPLATE_CHECKLIST_PICKER_V1
+
+def _htc_load(owner_id, template_id, target_keys):
+    from contextlib import closing
+    import sqlite3
+
+    try:
+        if _ht_owner() != owner_id:
+            raise PermissionError(
+                "Sign in again before loading a horse template."
+            )
+
+        if set(target_keys) != set(_HT_FIELDS):
+            raise ValueError(
+                "The horse-template fields and checklist "
+                "loader do not match."
+            )
+
+        with closing(get_db_connection()) as conn, conn:
+            _ht_schema(conn)
+
+            row = conn.execute(
+                "SELECT * FROM horse_profile_templates "
+                "WHERE id=? AND owner_id=?",
+                (template_id, owner_id),
+            ).fetchone()
+
+            if row is None:
+                raise ValueError(
+                    "This horse template is no longer available."
+                )
+
+            names = _ht_names(
+                conn,
+                owner_id,
+                dict(row),
+            )
+
+        if not names.get("horse"):
+            raise ValueError(
+                "The template's horse is no longer registered. "
+                "Edit the template first."
+            )
+
+        # Resolve all values before changing any draft fields.
+        updates = {
+            target_keys[field]: names.get(field) or None
+            for field in _HT_FIELDS
+        }
+
+        # This callback runs before widgets are rendered on rerun.
+        for key, value in updates.items():
+            st.session_state[key] = value
+
+        # Keep the existing automatic horse-default loader in sync.
+        st.session_state[
+            f"ht_last_horse_{owner_id}"
+        ] = (
+            target_keys["horse"],
+            names["horse"].casefold(),
+        )
+
+        st.session_state[
+            f"htc_notice_{owner_id}"
+        ] = "Horse template loaded."
+
+    except (PermissionError, ValueError) as error:
+        st.session_state[
+            f"htc_error_{owner_id}"
+        ] = str(error)
+
+    except sqlite3.Error:
+        st.session_state[
+            f"htc_error_{owner_id}"
+        ] = (
+            "Could not load the horse template. Try again."
+        )
+
+
+def _htc_checklist_loader(owner_id, target_keys):
+    from contextlib import closing
+
+    if _ht_owner() != owner_id:
+        st.error(
+            "Administrator or other-user templates "
+            "cannot be loaded into this account."
+        )
+        return
+
+    notice = st.session_state.pop(
+        f"htc_notice_{owner_id}",
+        None,
+    )
+
+    error = st.session_state.pop(
+        f"htc_error_{owner_id}",
+        None,
+    )
+
+    if notice:
+        st.success(notice)
+
+    if error:
+        st.error(error)
+
+    with st.expander(
+        "Load Horse Template",
+        expanded=False,
+    ):
+        with closing(get_db_connection()) as conn, conn:
+            _ht_schema(conn)
+
+            rows = conn.execute(
+                "SELECT t.id, h.horse_name "
+                "FROM horse_profile_templates t "
+                "JOIN horses h "
+                "ON h.id=t.horse_id "
+                "AND h.owner_id=t.owner_id "
+                "WHERE t.owner_id=? "
+                "ORDER BY h.horse_name COLLATE NOCASE, t.id",
+                (owner_id,),
+            ).fetchall()
+
+        if not rows:
+            st.info(
+                "Create a horse template "
+                "from the Horse Templates menu."
+            )
+            return
+
+        lookup = {
+            row["id"]: str(row["horse_name"])
+            for row in rows
+        }
+
+        prefix = (
+            f"htc_picker_{owner_id}_"
+            f"{target_keys['horse']}"
+        )
+
+        select_key = prefix + "_selection"
+
+        if (
+            select_key in st.session_state
+            and st.session_state[select_key] not in lookup
+        ):
+            st.session_state[select_key] = None
+
+        selected = st.selectbox(
+            "Horse template",
+            [None] + list(lookup),
+            index=None,
+            key=select_key,
+            format_func=lambda item: (
+                "(Select a template)"
+                if item is None
+                else lookup[item]
+            ),
+            placeholder="Select a saved horse template",
+        )
+
+        st.caption(
+            "Load fills horse details only. "
+            "It does not save a checklist."
+        )
+
+        st.button(
+            "Load Horse Template",
+            key=prefix + "_load",
+            disabled=selected is None,
+            on_click=_htc_load,
+            args=(
+                owner_id,
+                selected,
+                target_keys,
+            ),
+        )
+
 def main():
     _review_was_logged_in = bool(st.session_state.get('logged_in', False))
     st.session_state.setdefault('app_navigation_page', 'Checklist Review')
@@ -7517,10 +8158,13 @@ def main():
         return
     st.sidebar.title('Horse Checklist App')
     st.sidebar.write(f'Logged in as: {st.session_state.display_name}')
-    page = _hcm_menu('Menu', _shin2_admin_options(['Checklist Review', 'Monthly Jockey Prize', 'Monthly Horse Owner Prize', 'Monthly Trainer Prize', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog', 'Prize a Month — Stallions', 'Prize a Month — Breeding Farms', 'Prize a Month — Checklist Criteria']), key='app_navigation_page')
+    page = _hcm_menu('Menu', _ht_menu_options(_shin2_admin_options(['Checklist Review', 'Monthly Jockey Prize', 'Monthly Horse Owner Prize', 'Monthly Trainer Prize', 'Race Checklist', 'Account Settings', 'Horses', 'Horse Owners', 'Jockeys', 'Trainers', 'Breeding Farms', 'Stallions', 'Venues', 'Race Names', 'Criteria', 'Race Templates', 'Race Classes', 'Race Blog', 'Prize a Month — Stallions', 'Prize a Month — Breeding Farms', 'Prize a Month — Checklist Criteria'])), key='app_navigation_page')
     if st.sidebar.button('Logout'):
         _persistent_login_logout()
         st.rerun()
+    if page == 'Horse Templates':
+        _ht_page()
+        return
     if page == _SHIN2_ADMIN_PAGE:
         _shin2_render_user_admin()
         return
@@ -7569,6 +8213,7 @@ def main():
         render_template_page('race_name', 'Race Names', 'Race Name')
     elif page == 'Criteria':
         render_template_page('criteria', 'Criteria', 'Criteria Name')
+
 
 
 

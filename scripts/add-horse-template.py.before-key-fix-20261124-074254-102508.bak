@@ -1,0 +1,1064 @@
+# scripts/add-horse-template.py
+#
+# Adds account-scoped horse templates:
+#   Horse, Horse Owner, Stallion, Broodmare Sire, Trainer.
+#
+# Features:
+#   - Choose existing names or type new names.
+#   - Register new names when saving.
+#   - Create, edit and delete templates.
+#   - Load defaults when selecting a horse in Race Checklist.
+#   - Preserve per-checklist overrides on subsequent reruns.
+#   - Explicit "Apply horse template" button reloads saved defaults.
+#
+# Existing checklists are never updated by template changes.
+# Deleting a template does not delete its horse or reference records.
+#
+# Integrates with the existing styled menu and shin2 admin wrapper.
+# Creates horse_profile_templates on first feature use.
+# The patch command itself does not open or modify the database.
+#
+# Stop Streamlit before running:
+#
+# python scripts/add-horse-template.py app.py
+
+RUNTIME = r'''
+# HORSE_PROFILE_TEMPLATES_V1
+
+_HT_FIELDS = {
+    "horse": (
+        "Horse", "horses", "horse_name"
+    ),
+    "horse_owner": (
+        "Horse owner", "horse_owners", "horse_owner_name"
+    ),
+    "stallion": (
+        "Stallion", "stallions", "stallion_name"
+    ),
+    "broodmare_sire": (
+        "Broodmare sire", "stallions", "stallion_name"
+    ),
+    "trainer": (
+        "Trainer", "trainers", "trainer_name"
+    ),
+}
+
+
+def _ht_owner():
+    owner = st.session_state.get("user_id")
+    if not st.session_state.get("logged_in") or owner is None:
+        raise PermissionError("Sign in to use horse templates.")
+    return owner
+
+
+def _ht_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS horse_profile_templates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner_id INTEGER NOT NULL,
+            horse_id INTEGER NOT NULL,
+            horse_owner_id INTEGER,
+            stallion_id INTEGER,
+            broodmare_sire_id INTEGER,
+            trainer_id INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(owner_id, horse_id),
+            FOREIGN KEY(owner_id) REFERENCES users(id),
+            FOREIGN KEY(horse_id) REFERENCES horses(id),
+            FOREIGN KEY(horse_owner_id) REFERENCES horse_owners(id),
+            FOREIGN KEY(stallion_id) REFERENCES stallions(id),
+            FOREIGN KEY(broodmare_sire_id) REFERENCES stallions(id),
+            FOREIGN KEY(trainer_id) REFERENCES trainers(id)
+        )
+    """)
+
+
+def _ht_names(conn, owner, profile):
+    result = {}
+
+    for field, (_, table, column) in _HT_FIELDS.items():
+        row = conn.execute(
+            f'SELECT "{column}" AS name FROM "{table}" '
+            'WHERE id = ? AND owner_id = ?',
+            (profile.get(field + "_id"), owner),
+        ).fetchone()
+
+        result[field] = (
+            str(row["name"]).strip()
+            if row and row["name"]
+            else ""
+        )
+
+    return result
+
+
+def _ht_reference(conn, owner, field, name):
+    name = str(name or "").strip()
+
+    if not name:
+        if field == "horse":
+            raise ValueError(
+                "Choose a horse or enter a new horse name."
+            )
+        return None
+
+    _, table, column = _HT_FIELDS[field]
+
+    rows = conn.execute(
+        f'SELECT id, "{column}" AS name FROM "{table}" '
+        'WHERE owner_id = ? ORDER BY id',
+        (owner,),
+    ).fetchall()
+
+    for row in rows:
+        if (
+            str(row["name"]).strip().casefold()
+            == name.casefold()
+        ):
+            return row["id"]
+
+    return conn.execute(
+        f'INSERT INTO "{table}" '
+        f'(owner_id, "{column}") VALUES (?, ?)',
+        (owner, name),
+    ).lastrowid
+
+
+def _ht_save(values, template_id=None):
+    from contextlib import closing
+
+    owner = _ht_owner()
+
+    with closing(get_db_connection()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        _ht_schema(conn)
+
+        if template_id is not None:
+            existing = conn.execute(
+                "SELECT 1 FROM horse_profile_templates "
+                "WHERE id = ? AND owner_id = ?",
+                (template_id, owner),
+            ).fetchone()
+
+            if existing is None:
+                raise ValueError(
+                    "This horse template is no longer available."
+                )
+
+        ids = {
+            field: _ht_reference(
+                conn, owner, field, values.get(field)
+            )
+            for field in _HT_FIELDS
+        }
+
+        duplicate = conn.execute(
+            "SELECT id FROM horse_profile_templates "
+            "WHERE owner_id = ? AND horse_id = ?",
+            (owner, ids["horse"]),
+        ).fetchone()
+
+        if duplicate and duplicate["id"] != template_id:
+            raise ValueError(
+                "This horse already has a template. "
+                "Select that template to edit it."
+            )
+
+        args = tuple(
+            ids[field]
+            for field in _HT_FIELDS
+        )
+
+        if template_id is None:
+            return conn.execute(
+                "INSERT INTO horse_profile_templates "
+                "(horse_id, horse_owner_id, stallion_id, "
+                "broodmare_sire_id, trainer_id, owner_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (*args, owner),
+            ).lastrowid
+
+        conn.execute(
+            "UPDATE horse_profile_templates "
+            "SET horse_id=?, horse_owner_id=?, stallion_id=?, "
+            "broodmare_sire_id=?, trainer_id=?, "
+            "updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND owner_id=?",
+            (*args, template_id, owner),
+        )
+
+        return template_id
+
+
+def _ht_delete(template_id):
+    from contextlib import closing
+
+    owner = _ht_owner()
+
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+
+        result = conn.execute(
+            "DELETE FROM horse_profile_templates "
+            "WHERE id = ? AND owner_id = ?",
+            (template_id, owner),
+        )
+
+        if result.rowcount != 1:
+            raise ValueError(
+                "This horse template is no longer available."
+            )
+
+
+def _ht_reference_input(label, existing_options, *, key):
+    import inspect
+
+    if (
+        "accept_new_options"
+        not in inspect.signature(st.selectbox).parameters
+    ):
+        st.error(
+            "Horse templates require Streamlit selectbox "
+            "support for accept_new_options. Update Streamlit."
+        )
+        st.stop()
+
+    names = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in existing_options[1:]
+            if value is not None
+            and str(value).strip()
+        )
+    )
+
+    selected = st.selectbox(
+        label,
+        names,
+        index=None,
+        key=key,
+        accept_new_options=True,
+        placeholder="Choose an existing name or type a new one",
+        help="New names are registered when you save.",
+    )
+
+    return (
+        str(selected).strip()
+        if selected is not None
+        else ""
+    )
+
+
+def _ht_horse_input(
+    label,
+    existing_options,
+    *,
+    key,
+    target_keys,
+):
+    from contextlib import closing
+
+    owner = _ht_owner()
+
+    selected = _ht_reference_input(
+        label,
+        existing_options,
+        key=key,
+    )
+
+    profile = None
+
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+
+        if selected:
+            horses = conn.execute(
+                "SELECT id, horse_name FROM horses "
+                "WHERE owner_id=? ORDER BY id",
+                (owner,),
+            )
+
+            for horse in horses:
+                if (
+                    str(horse["horse_name"]).strip().casefold()
+                    == selected.casefold()
+                ):
+                    row = conn.execute(
+                        "SELECT * FROM horse_profile_templates "
+                        "WHERE owner_id=? AND horse_id=?",
+                        (owner, horse["id"]),
+                    ).fetchone()
+
+                    if row:
+                        profile = _ht_names(
+                            conn, owner, dict(row)
+                        )
+
+                    break
+
+    last_key = f"ht_last_horse_{owner}"
+    previous = st.session_state.get(last_key)
+    current = (key, selected.casefold())
+
+    reload = False
+
+    if profile is not None:
+        reload = st.button(
+            "Apply horse template",
+            key=f"{key}_apply_horse_template",
+            help=(
+                "Reload the saved owner, stallion, "
+                "broodmare sire and trainer "
+                "into this draft only."
+            ),
+        )
+
+    if previous != current or reload:
+        if profile is not None:
+            for field, widget_key in target_keys.items():
+                st.session_state[widget_key] = (
+                    profile[field] or None
+                )
+
+        elif (
+            previous is not None
+            and previous[1] != current[1]
+        ):
+            # Do not carry another horse's defaults forward.
+            for widget_key in target_keys.values():
+                st.session_state[widget_key] = None
+
+        st.session_state[last_key] = current
+
+    return selected
+
+
+def _ht_menu_options(options):
+    pages = list(options)
+
+    if "Horse Templates" not in pages:
+        pages.append("Horse Templates")
+
+    return pages
+
+
+def _ht_page():
+    from contextlib import closing
+    import sqlite3
+
+    owner = _ht_owner()
+    prefix = f"horse_templates_{owner}_"
+
+    st.header("Horse Templates")
+
+    message = st.session_state.pop(
+        prefix + "message", None
+    )
+
+    if message:
+        st.success(message)
+
+    with closing(get_db_connection()) as conn, conn:
+        _ht_schema(conn)
+
+        profiles = {
+            row["id"]: dict(row)
+            for row in conn.execute(
+                "SELECT t.*, h.horse_name "
+                "FROM horse_profile_templates t "
+                "LEFT JOIN horses h "
+                "ON h.id=t.horse_id "
+                "AND h.owner_id=t.owner_id "
+                "WHERE t.owner_id=? "
+                "ORDER BY h.horse_name COLLATE NOCASE, t.id",
+                (owner,),
+            ).fetchall()
+        }
+
+        choices = {}
+
+        for field, (_, table, column) in _HT_FIELDS.items():
+            choices[field] = [
+                row["name"]
+                for row in conn.execute(
+                    f'SELECT "{column}" AS name '
+                    f'FROM "{table}" WHERE owner_id=? '
+                    f'ORDER BY "{column}" COLLATE NOCASE',
+                    (owner,),
+                ).fetchall()
+            ]
+
+    revision = st.session_state.get(
+        prefix + "revision", 0
+    )
+
+    select_key = prefix + f"select_{revision}"
+
+    if select_key not in st.session_state:
+        initial_selection = st.session_state.get(
+            prefix + "selected_id"
+        )
+
+        st.session_state[select_key] = (
+            initial_selection
+            if initial_selection in profiles
+            else None
+        )
+
+    selected = st.selectbox(
+        "Template",
+        [None] + list(profiles),
+        index=None,
+        key=select_key,
+        format_func=lambda item: (
+            "Create new template"
+            if item is None
+            else (
+                profiles[item]["horse_name"]
+                or f"Missing horse #{profiles[item]['horse_id']}"
+            )
+        ),
+        placeholder="Create new template",
+    )
+
+    st.session_state[prefix + "selected_id"] = selected
+
+    initial = {
+        field: ""
+        for field in _HT_FIELDS
+    }
+
+    if selected is not None:
+        with closing(get_db_connection()) as conn:
+            initial = _ht_names(
+                conn, owner, profiles[selected]
+            )
+
+    token = f"{revision}_{selected}"
+
+    with st.form(prefix + "form_" + token):
+        values = {}
+
+        for field, (label, _, _) in _HT_FIELDS.items():
+            field_key = (
+                prefix + token + "_" + field
+            )
+
+            if field_key not in st.session_state:
+                st.session_state[field_key] = (
+                    initial[field] or None
+                )
+
+            values[field] = _ht_reference_input(
+                label,
+                ["No selection"] + choices[field],
+                key=field_key,
+            )
+
+        save = st.form_submit_button(
+            "Save template",
+            type="primary",
+        )
+
+    if save:
+        try:
+            template_id = _ht_save(
+                values, selected
+            )
+
+        except ValueError as error:
+            st.error(str(error))
+
+        except sqlite3.Error:
+            st.error(
+                "Could not save the template. "
+                "No partial changes were committed."
+            )
+
+        else:
+            st.session_state[
+                prefix + "selected_id"
+            ] = template_id
+
+            st.session_state[
+                prefix + "revision"
+            ] = revision + 1
+
+            st.session_state[prefix + "message"] = (
+                "Horse template saved. "
+                "Existing checklists were not changed."
+            )
+
+            st.rerun()
+
+    if selected is not None:
+        confirmed = st.checkbox(
+            "Confirm template deletion",
+            key=prefix + "delete_confirm_" + token,
+            help=(
+                "Deletes only this template. "
+                "Registered horses, reference names "
+                "and existing checklists are kept."
+            ),
+        )
+
+        if st.button(
+            "Delete template",
+            key=prefix + "delete_" + token,
+            disabled=not confirmed,
+        ):
+            try:
+                _ht_delete(selected)
+
+            except ValueError as error:
+                st.error(str(error))
+
+            except sqlite3.Error:
+                st.error(
+                    "Could not delete the template."
+                )
+
+            else:
+                st.session_state[
+                    prefix + "selected_id"
+                ] = None
+
+                st.session_state[
+                    prefix + "revision"
+                ] = revision + 1
+
+                st.session_state[prefix + "message"] = (
+                    "Horse template deleted. "
+                    "Existing checklists were kept."
+                )
+
+                st.rerun()
+
+'''
+
+import argparse
+import ast
+import copy
+from datetime import datetime
+from pathlib import Path
+import shutil
+import tempfile
+
+
+MARKER = "# HORSE_PROFILE_TEMPLATES_V1"
+TITLE = "Horse Templates"
+
+
+def find_function(tree, name):
+    found = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == name
+    ]
+
+    if len(found) != 1:
+        raise ValueError(
+            f"Expected one {name}; found {len(found)}."
+        )
+
+    return found[0]
+
+
+def start_line(node):
+    return min(
+        [node.lineno]
+        + [
+            decorator.lineno
+            for decorator in node.decorator_list
+        ]
+    ) - 1
+
+
+def patch_source(source):
+    tree = ast.parse(source)
+
+    if MARKER in source:
+        for name in (
+            "_ht_page",
+            "_ht_save",
+            "_ht_horse_input",
+        ):
+            find_function(tree, name)
+
+        return source, False
+
+    if any(
+        isinstance(node, ast.FunctionDef)
+        and node.name.startswith("_ht_")
+        for node in tree.body
+    ):
+        raise ValueError(
+            "Conflicting horse-template helpers already exist."
+        )
+
+    if any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name)
+            and target.id == "_HT_FIELDS"
+            for target in node.targets
+        )
+        for node in tree.body
+    ):
+        raise ValueError(
+            "Conflicting horse-template configuration "
+            "already exists."
+        )
+
+    find_function(tree, "get_db_connection")
+
+    race = find_function(
+        tree, "render_race_checklist_page"
+    )
+    main = find_function(tree, "main")
+
+    mapping = {
+        "selected_horse_idx": "horse",
+        "selected_horse_owner_idx": "horse_owner",
+        "selected_stallion_idx": "stallion",
+        "selected_broodmare_sire_idx": "broodmare_sire",
+        "selected_trainer_idx": "trainer",
+    }
+
+    inputs = {}
+
+    for node in ast.walk(race):
+        if not isinstance(node, ast.Assign):
+            continue
+
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id in mapping
+            ):
+                if (
+                    target.id in inputs
+                    or not isinstance(node.value, ast.Call)
+                ):
+                    raise ValueError(
+                        "Ambiguous horse-reference assignment."
+                    )
+
+                inputs[target.id] = node.value
+
+    if set(inputs) != set(mapping):
+        raise ValueError(
+            "Cannot identify all five horse-reference "
+            "fields in Race Checklist."
+        )
+
+    keys = {}
+
+    for name, call in inputs.items():
+        if (
+            not isinstance(call.func, ast.Name)
+            or call.func.id != "render_race_reference_input"
+            or len(call.args) != 2
+        ):
+            raise ValueError(
+                f"Unexpected reference input for {name}; "
+                "refusing an unsafe patch."
+            )
+
+        if (
+            len(call.keywords) != 1
+            or call.keywords[0].arg != "key"
+        ):
+            raise ValueError(
+                "Unexpected reference widget arguments "
+                f"for {name}."
+            )
+
+        key = call.keywords[0].value
+
+        if not (
+            isinstance(key, ast.Call)
+            and isinstance(key.func, ast.Name)
+            and key.func.id == "registration_key"
+            and len(key.args) == 1
+            and isinstance(key.args[0], ast.Constant)
+            and isinstance(key.args[0].value, str)
+        ):
+            raise ValueError(
+                "Expected revision-aware "
+                "registration_key widget keys."
+            )
+
+        keys[mapping[name]] = copy.deepcopy(key)
+
+    horse = inputs["selected_horse_idx"]
+
+    if any(
+        call.lineno <= horse.lineno
+        for name, call in inputs.items()
+        if name != "selected_horse_idx"
+    ):
+        raise ValueError(
+            "The horse field must appear before "
+            "its related reference fields."
+        )
+
+    for node in ast.walk(race):
+        if not isinstance(node, ast.With):
+            continue
+
+        is_form = any(
+            isinstance(child, ast.Call)
+            and ast.unparse(child.func) == "st.form"
+            for item in node.items
+            for child in ast.walk(item.context_expr)
+        )
+
+        if is_form and any(
+            child is horse
+            for child in ast.walk(node)
+        ):
+            raise ValueError(
+                "Automatic horse defaults require the "
+                "horse selector outside a Streamlit form."
+            )
+
+    for name, call in inputs.items():
+        call.func = ast.Name(
+            id=(
+                "_ht_horse_input"
+                if name == "selected_horse_idx"
+                else "_ht_reference_input"
+            ),
+            ctx=ast.Load(),
+        )
+
+    related = {
+        field: key
+        for field, key in keys.items()
+        if field != "horse"
+    }
+
+    horse.keywords.append(
+        ast.keyword(
+            arg="target_keys",
+            value=ast.Dict(
+                keys=[
+                    ast.Constant(value=field)
+                    for field in related
+                ],
+                values=list(related.values()),
+            ),
+        )
+    )
+
+    menus = [
+        node
+        for node in main.body
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and isinstance(node.value, ast.Call)
+            and ast.unparse(node.value.func)
+            in {"_hcm_menu", "st.sidebar.radio"}
+        )
+    ]
+
+    if len(menus) != 1:
+        raise ValueError(
+            "Cannot uniquely identify "
+            "the main sidebar menu."
+        )
+
+    assignment = menus[0]
+    menu = assignment.value
+    page_name = assignment.targets[0].id
+
+    if any(
+        isinstance(node, ast.Constant)
+        and node.value == TITLE
+        for node in ast.walk(menu)
+    ):
+        raise ValueError(
+            "A Horse Templates menu entry already exists."
+        )
+
+    if len(menu.args) >= 2:
+        menu.args[1] = ast.Call(
+            func=ast.Name(
+                id="_ht_menu_options",
+                ctx=ast.Load(),
+            ),
+            args=[menu.args[1]],
+            keywords=[],
+        )
+
+    else:
+        options = [
+            keyword
+            for keyword in menu.keywords
+            if keyword.arg == "options"
+        ]
+
+        if len(options) != 1:
+            raise ValueError(
+                "Cannot identify "
+                "the existing sidebar options."
+            )
+
+        options[0].value = ast.Call(
+            func=ast.Name(
+                id="_ht_menu_options",
+                ctx=ast.Load(),
+            ),
+            args=[options[0].value],
+            keywords=[],
+        )
+
+    logout = [
+        index
+        for index, node in enumerate(main.body)
+        if (
+            isinstance(node, ast.If)
+            and any(
+                isinstance(call, ast.Call)
+                and ast.unparse(call.func)
+                == "st.sidebar.button"
+                and any(
+                    isinstance(argument, ast.Constant)
+                    and isinstance(argument.value, str)
+                    and argument.value.casefold() == "logout"
+                    for argument in [
+                        *call.args,
+                        *(
+                            keyword.value
+                            for keyword in call.keywords
+                            if keyword.arg == "label"
+                        ),
+                    ]
+                )
+                for call in ast.walk(node.test)
+            )
+        )
+    ]
+
+    if (
+        len(logout) != 1
+        or logout[0] <= main.body.index(assignment)
+    ):
+        raise ValueError(
+            "Cannot locate the existing logout block "
+            "after the menu."
+        )
+
+    route = ast.parse(
+        f"if {page_name} == {TITLE!r}:\n"
+        "    _ht_page()\n"
+        "    return\n"
+    ).body[0]
+
+    main.body.insert(
+        logout[0] + 1,
+        route,
+    )
+
+    ast.fix_missing_locations(race)
+    ast.fix_missing_locations(main)
+
+    helpers = ast.parse(RUNTIME).body
+
+    replacement = (
+        RUNTIME.strip()
+        + "\n\n"
+        + ast.unparse(main)
+        + "\n\n"
+    )
+
+    edits = [
+        (
+            start_line(race),
+            race.end_lineno,
+            ast.unparse(race) + "\n\n",
+        ),
+        (
+            start_line(main),
+            main.end_lineno,
+            replacement,
+        ),
+    ]
+
+    edits.sort()
+
+    if any(
+        right[0] < left[1]
+        for left, right in zip(edits, edits[1:])
+    ):
+        raise ValueError(
+            "Overlapping source edits."
+        )
+
+    index = tree.body.index(main)
+    tree.body[index:index] = helpers
+
+    lines = source.splitlines(keepends=True)
+
+    for begin, end, text in reversed(edits):
+        lines[begin:end] = [text]
+
+    updated = "".join(lines)
+
+    compile(
+        updated,
+        "<horse-template-feature>",
+        "exec",
+    )
+
+    if ast.dump(
+        ast.parse(updated),
+        include_attributes=False,
+    ) != ast.dump(
+        tree,
+        include_attributes=False,
+    ):
+        raise ValueError(
+            "Unexpected changes outside the intended "
+            "horse-template integration."
+        )
+
+    return updated, True
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Add editable, account-scoped horse templates "
+            "and Race Checklist autofill."
+        )
+    )
+
+    parser.add_argument(
+        "app_file",
+        nargs="?",
+        default="app.py",
+    )
+
+    app = Path(
+        parser.parse_args().app_file
+    ).resolve()
+
+    if not app.is_file():
+        raise SystemExit(
+            f"Application file not found: {app}"
+        )
+
+    original = app.read_bytes()
+
+    try:
+        updated, changed = patch_source(
+            original.decode("utf-8-sig")
+        )
+
+    except Exception as error:
+        raise SystemExit(
+            "Validation failed. "
+            "Application was not changed.\n"
+            f"{error}"
+        ) from error
+
+    if not changed:
+        print(
+            "Horse templates are already installed."
+        )
+        return
+
+    stamp = datetime.now().strftime(
+        "%Y%m%d-%H%M%S-%f"
+    )
+
+    backup = app.with_name(
+        f"{app.name}."
+        f"before-horse-templates-{stamp}.bak"
+    )
+
+    temporary = None
+
+    try:
+        if app.read_bytes() != original:
+            raise RuntimeError(
+                "Application changed during validation. Retry."
+            )
+
+        shutil.copy2(app, backup)
+
+        if backup.read_bytes() != original:
+            raise RuntimeError(
+                "Source backup verification failed."
+            )
+
+        encoding = (
+            "utf-8-sig"
+            if original.startswith(b"\xef\xbb\xbf")
+            else "utf-8"
+        )
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding=encoding,
+            newline="\n",
+            dir=app.parent,
+            prefix=f".{app.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(updated)
+
+        shutil.copymode(app, temporary)
+
+        if app.read_bytes() != original:
+            raise RuntimeError(
+                "Application changed before replacement. Retry."
+            )
+
+        temporary.replace(app)
+        temporary = None
+
+    finally:
+        if (
+            temporary is not None
+            and temporary.exists()
+        ):
+            temporary.unlink()
+
+    print(f"Updated application: {app}")
+    print(f"Source backup: {backup}")
+    print(
+        "Added Horse Templates: create, edit, delete "
+        "and new-name registration."
+    )
+    print(
+        "Choosing a horse in Race Checklist "
+        "loads its four saved defaults."
+    )
+    print(
+        "A separate horse_profile_templates table "
+        "is created on first use."
+    )
+    print(
+        "Existing checklists and reference records "
+        "were not changed by this patch."
+    )
+    print(
+        "Existing menu styling, administrator access "
+        "and pagination were preserved."
+    )
+    print(
+        "Restart Streamlit and open Horse Templates."
+    )
+
+
+if __name__ == "__main__":
+    main()
