@@ -5223,57 +5223,25 @@ def filter_checklists(checklists, selected_filters, selected_venue_ids, criteria
 
 # REVIEW_ARROW_TYPES_AND_WIDTH_FIX_V1
 def _review_arrow_safe_summary(dataframe):
-    # This function receives a newly created display dataframe.
-    # It does not modify the underlying checklist records.
     if dataframe.empty:
         return dataframe
-
-    numeric_columns = {
-        "ID",
-        "Days Since Last Race",
-        "Distance",
-        "Previous Distance",
-        "Weight Change (kg)",
-        "Horse Weight (kg)",
-        "Odds",
-        "Program Number",
-        "Number of Horses",
-        "Bracket Number",
-        "Horse Number",
-    }
-
+    numeric_columns = {'ID', 'Days Since Last Race', 'Distance', 'Previous Distance', 'Weight Change (kg)', 'Horse Weight (kg)', 'Odds', 'Program Number', 'Number of Horses', 'Bracket Number', 'Horse Number', 'Prize (¥)'}
     for column in dataframe.columns:
         if column in numeric_columns:
-            numeric = pd.to_numeric(
-                dataframe[column],
-                errors="coerce",
-            )
-
-            # Keep non-finite values out of numeric display columns.
-            numeric = numeric.mask(
-                numeric.isin([float("inf"), float("-inf")])
-            )
-
-            if column == "ID":
+            numeric = pd.to_numeric(dataframe[column], errors='coerce')
+            numeric = numeric.mask(numeric.isin([float('inf'), float('-inf')]))
+            if column == 'ID':
                 valid = numeric.dropna()
-
                 if valid.empty or (valid % 1 == 0).all():
-                    dataframe[column] = numeric.astype("Int64")
+                    dataframe[column] = numeric.astype('Int64')
                 else:
-                    dataframe[column] = numeric.astype("Float64")
+                    dataframe[column] = numeric.astype('Float64')
             else:
-                dataframe[column] = numeric.astype("Float64")
-
+                dataframe[column] = numeric.astype('Float64')
         else:
-            # Finishing positions remain text so nonnumeric race outcomes
-            # are preserved. Currency-formatted prize text also stays text.
-            dataframe[column] = (
-                dataframe[column]
-                .astype("string")
-                .fillna("")
-            )
-
+            dataframe[column] = dataframe[column].astype('string').fillna('')
     return dataframe
+
 
 # REVIEW_TABLE_TALLER_AND_REFERENCE_COLUMNS_V1
 # REVIEW_MATCHED_TABLE_MEMO_V1
@@ -5281,8 +5249,9 @@ def build_summary_dataframe(checklists):
     summary_rows = []
     for entry in checklists:
         checked_criteria = [key for key, value in (entry.get('checklist') or {}).items() if value]
-        summary_rows.append({'ID': entry['id'], 'Date': entry.get('date_of_race') or '', 'Previous Race Date': entry.get('previous_race_date') or '', 'Days Since Last Race': entry.get('interval_days') if entry.get('interval_days') is not None else '', 'Bracket Number': entry.get('bracket_number'), 'Horse Number': entry.get('horse_number'), 'Horse': entry.get('horse_name') or '', 'Memo': '' if entry.get('memo') is None else str(entry.get('memo')), 'Horse Owner': entry.get('horse_owner_name') or '', 'Jockey': entry.get('jockey_name') or '', 'Trainer': entry.get('trainer_name') or '', 'Breeding Farm': entry.get('breeding_farm_name') or '', 'Stallion': entry.get('stallion_name') or '', 'Race': entry.get('race_name') or '', 'Venue': entry.get('venue_name') or '', 'Previous Venue': entry.get('previous_venue_name') or '', 'Distance': entry.get('distance') or '', 'Previous Distance': entry.get('previous_distance') or '', 'Weight Change (kg)': format_signed_number(entry.get('weight_change')), 'Horse Weight (kg)': entry.get('horse_weight') or '', 'Place': entry.get('finished_place') or '', 'Odds': entry.get('odds') if entry.get('odds') is not None else '', 'Prize (¥)': f"¥{entry.get('prize'):,.0f}" if entry.get('prize') is not None else '', 'Criteria': ' | '.join(checked_criteria), 'Race Class': entry.get('race_class_name') or ''})
+        summary_rows.append({'ID': entry['id'], 'Date': entry.get('date_of_race') or '', 'Previous Race Date': entry.get('previous_race_date') or '', 'Days Since Last Race': entry.get('interval_days') if entry.get('interval_days') is not None else '', 'Bracket Number': entry.get('bracket_number'), 'Horse Number': entry.get('horse_number'), 'Horse': entry.get('horse_name') or '', 'Memo': '' if entry.get('memo') is None else str(entry.get('memo')), 'Horse Owner': entry.get('horse_owner_name') or '', 'Jockey': entry.get('jockey_name') or '', 'Trainer': entry.get('trainer_name') or '', 'Breeding Farm': entry.get('breeding_farm_name') or '', 'Stallion': entry.get('stallion_name') or '', 'Race': entry.get('race_name') or '', 'Venue': entry.get('venue_name') or '', 'Previous Venue': entry.get('previous_venue_name') or '', 'Distance': entry.get('distance') or '', 'Previous Distance': entry.get('previous_distance') or '', 'Weight Change (kg)': format_signed_number(entry.get('weight_change')), 'Horse Weight (kg)': entry.get('horse_weight') or '', 'Place': entry.get('finished_place') or '', 'Odds': entry.get('odds') if entry.get('odds') is not None else '', 'Prize (¥)': _crp_number(entry.get('prize')), 'Criteria': ' | '.join(checked_criteria), 'Race Class': entry.get('race_class_name') or ''})
     return _review_arrow_safe_summary(pd.DataFrame(summary_rows))
+
 
 
 
@@ -5897,61 +5866,26 @@ def _render_review_stacked_count_chart(title, rows, total, category_count):
 
 
 # TRAINER_STALLION_STACKED_COUNT_CHARTS_V1
-def render_review_stacked_count_charts(
-    owner_id,
-    first_filtered_checklists,
-    second_filtered_checklists=None,
-    second_filter_enabled=False,
-):
+def render_review_stacked_count_charts(owner_id, first_filtered_checklists, second_filtered_checklists=None, second_filter_enabled=False):
     from collections import Counter
-
-    st.subheader("Venue, Jockey, Trainer and Stallion Dominance")
-
-    show_charts = st.checkbox(
-        "Show venue, jockey, trainer and stallion count charts",
-        value=True,
-        key=f"review_stacked_count_charts_visible_{owner_id}",
-    )
-
+    show_charts = st.checkbox('Show venue, jockey, trainer and stallion count charts', value=False, key=f'review_stacked_count_charts_visible_20261125_{owner_id}')
     if not show_charts:
         return
-
+    st.subheader('Venue, Jockey, Trainer and Stallion Dominance')
     use_second_filter = False
-
     if second_filter_enabled:
-        use_second_filter = st.checkbox(
-            "Use second-filter results for these charts",
-            value=False,
-            key=f"review_stacked_count_charts_second_filter_{owner_id}",
-        )
-
+        use_second_filter = st.checkbox('Use second-filter results for these charts', value=False, key=f'review_stacked_count_charts_second_filter_{owner_id}')
     if use_second_filter:
-        records = (
-            second_filtered_checklists
-            if second_filtered_checklists is not None
-            else []
-        )
-        scope = "Second-filter results"
+        records = second_filtered_checklists if second_filtered_checklists is not None else []
+        scope = 'Second-filter results'
     else:
         records = first_filtered_checklists
-        scope = "First-filter results"
-
-    st.caption(
-        f"Scope: {scope}, before pagination. "
-        "Each checklist contributes one count to each chart: "
-        "venue, jockey, trainer and stallion. "
-        "Missing selections are included as separate categories. "
-        "These charts show record concentration, not win rates. "
-        "Largest individual category is at the left; "
-        "smaller categories follow. Any combined Other segment is last."
-    )
-
+        scope = 'First-filter results'
+    st.caption(f'Scope: {scope}, before pagination. Each checklist contributes one count to each chart: venue, jockey, trainer and stallion. Missing selections are included as separate categories. These charts show record concentration, not win rates. Largest individual category is at the left; smaller categories follow. Any combined Other segment is last.')
     total = len(records)
-
     if total == 0:
-        st.info("No matching checklist records for the selected chart scope.")
+        st.info('No matching checklist records for the selected chart scope.')
         return
-
     venue_counts = Counter()
     jockey_counts = Counter()
     trainer_counts = Counter()
@@ -5960,124 +5894,68 @@ def render_review_stacked_count_charts(
     jockey_labels = {}
     trainer_labels = {}
     stallion_labels = {}
-
     for entry in records:
-        venue_id = entry.get("venue_id")
-        venue_name = clean_text(entry.get("venue_name"))
-
+        venue_id = entry.get('venue_id')
+        venue_name = clean_text(entry.get('venue_name'))
         if venue_id is not None:
-            venue_key = ("id", venue_id)
-            venue_label = venue_name or f"Venue #{venue_id}"
-        elif venue_name and venue_name != "No venue selected":
-            venue_key = ("name", venue_name)
+            venue_key = ('id', venue_id)
+            venue_label = venue_name or f'Venue #{venue_id}'
+        elif venue_name and venue_name != 'No venue selected':
+            venue_key = ('name', venue_name)
             venue_label = venue_name
         else:
-            venue_key = ("missing",)
-            venue_label = "(No venue selected)"
-
+            venue_key = ('missing',)
+            venue_label = '(No venue selected)'
         venue_counts[venue_key] += 1
         venue_labels[venue_key] = venue_label
-
-        jockey_id = entry.get("jockey_id")
-        jockey_name = clean_text(entry.get("jockey_name"))
-
+        jockey_id = entry.get('jockey_id')
+        jockey_name = clean_text(entry.get('jockey_name'))
         if jockey_id is not None:
-            jockey_key = ("id", jockey_id)
-            jockey_label = jockey_name or f"Jockey #{jockey_id}"
-        elif jockey_name and jockey_name != "No jockey selected":
-            jockey_key = ("name", jockey_name)
+            jockey_key = ('id', jockey_id)
+            jockey_label = jockey_name or f'Jockey #{jockey_id}'
+        elif jockey_name and jockey_name != 'No jockey selected':
+            jockey_key = ('name', jockey_name)
             jockey_label = jockey_name
         else:
-            jockey_key = ("missing",)
-            jockey_label = "(No jockey selected)"
-
+            jockey_key = ('missing',)
+            jockey_label = '(No jockey selected)'
         jockey_counts[jockey_key] += 1
         jockey_labels[jockey_key] = jockey_label
-
-        trainer_id = entry.get("trainer_id")
-        trainer_name = clean_text(entry.get("trainer_name"))
-
+        trainer_id = entry.get('trainer_id')
+        trainer_name = clean_text(entry.get('trainer_name'))
         if trainer_id is not None:
-            trainer_key = ("id", trainer_id)
-            trainer_label = trainer_name or f"Trainer #{trainer_id}"
-        elif trainer_name and trainer_name != "No trainer selected":
-            trainer_key = ("name", trainer_name)
+            trainer_key = ('id', trainer_id)
+            trainer_label = trainer_name or f'Trainer #{trainer_id}'
+        elif trainer_name and trainer_name != 'No trainer selected':
+            trainer_key = ('name', trainer_name)
             trainer_label = trainer_name
         else:
-            trainer_key = ("missing",)
-            trainer_label = "(No trainer selected)"
-
+            trainer_key = ('missing',)
+            trainer_label = '(No trainer selected)'
         trainer_counts[trainer_key] += 1
         trainer_labels[trainer_key] = trainer_label
-
-        # Use the stallion field, not broodmare_sire_id.
-        stallion_id = entry.get("stallion_id")
-        stallion_name = clean_text(entry.get("stallion_name"))
-
+        stallion_id = entry.get('stallion_id')
+        stallion_name = clean_text(entry.get('stallion_name'))
         if stallion_id is not None:
-            stallion_key = ("id", stallion_id)
-            stallion_label = stallion_name or f"Stallion #{stallion_id}"
-        elif stallion_name and stallion_name != "No stallion selected":
-            stallion_key = ("name", stallion_name)
+            stallion_key = ('id', stallion_id)
+            stallion_label = stallion_name or f'Stallion #{stallion_id}'
+        elif stallion_name and stallion_name != 'No stallion selected':
+            stallion_key = ('name', stallion_name)
             stallion_label = stallion_name
         else:
-            stallion_key = ("missing",)
-            stallion_label = "(No stallion selected)"
-
+            stallion_key = ('missing',)
+            stallion_label = '(No stallion selected)'
         stallion_counts[stallion_key] += 1
         stallion_labels[stallion_key] = stallion_label
+    venue_rows = _review_count_chart_rows(venue_counts, venue_labels, total)
+    jockey_rows = _review_count_chart_rows(jockey_counts, jockey_labels, total)
+    trainer_rows = _review_count_chart_rows(trainer_counts, trainer_labels, total)
+    stallion_rows = _review_count_chart_rows(stallion_counts, stallion_labels, total)
+    _render_review_stacked_count_chart('Venue Count', venue_rows, total, len(venue_counts))
+    _render_review_stacked_count_chart('Jockey Count', jockey_rows, total, len(jockey_counts))
+    _render_review_stacked_count_chart('Trainer Count', trainer_rows, total, len(trainer_counts))
+    _render_review_stacked_count_chart('Stallion Count', stallion_rows, total, len(stallion_counts))
 
-    venue_rows = _review_count_chart_rows(
-        venue_counts,
-        venue_labels,
-        total,
-    )
-
-    jockey_rows = _review_count_chart_rows(
-        jockey_counts,
-        jockey_labels,
-        total,
-    )
-
-    trainer_rows = _review_count_chart_rows(
-        trainer_counts,
-        trainer_labels,
-        total,
-    )
-
-    stallion_rows = _review_count_chart_rows(
-        stallion_counts,
-        stallion_labels,
-        total,
-    )
-
-    _render_review_stacked_count_chart(
-        "Venue Count",
-        venue_rows,
-        total,
-        len(venue_counts),
-    )
-
-    _render_review_stacked_count_chart(
-        "Jockey Count",
-        jockey_rows,
-        total,
-        len(jockey_counts),
-    )
-
-    _render_review_stacked_count_chart(
-        "Trainer Count",
-        trainer_rows,
-        total,
-        len(trainer_counts),
-    )
-
-    _render_review_stacked_count_chart(
-        "Stallion Count",
-        stallion_rows,
-        total,
-        len(stallion_counts),
-    )
 
 
 
@@ -6681,6 +6559,7 @@ def render_checklist_review_page():
     weight_summary_col1.metric('Average Weight (Top 3)', f"{review_metrics['average_top_3_weight']:.1f} kg" if review_metrics['average_top_3_weight'] is not None else 'N/A')
     distance_summary_col.metric('Average Distance (Top 3)', f"{review_metrics['average_top_3_distance']:.1f} m" if review_metrics['average_top_3_distance'] is not None else 'N/A')
     interval_summary_col.metric('Average Days Since Last Race (Top 3)', f"{review_metrics['average_top_3_interval_days']:.1f} days" if review_metrics['average_top_3_interval_days'] is not None else 'N/A')
+    _crp_render_trend(owner_id, first_filtered_checklists, second_filtered_checklists, second_filter_enabled)
     st.subheader('Filtered Checklists')
     if first_filtered_checklists:
         st.download_button(label='📥 Download Filtered Results CSV', data=build_csv_download_bytes(first_filtered_checklists, criteria), file_name='horse_checklist_filtered_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.csv', mime='text/csv')
@@ -6708,7 +6587,7 @@ def render_checklist_review_page():
         last_item_number = min(current_page * page_size, total_results)
         st.caption(f'Showing {first_item_number}-{last_item_number} of {total_results} filtered checklist(s). Summary metrics above are calculated from all filtered results.')
         summary_df = build_summary_dataframe(paginated_checklists)
-        st.dataframe(summary_df, width='stretch', hide_index=True, height=480)
+        _crp_review_table(summary_df, width='stretch', hide_index=True, height=480)
         checklist_lookup = {entry['id']: entry for entry in paginated_checklists}
         if checklist_lookup:
             selected_review_checklist_id = st.selectbox('Select checklist on this page to edit', list(checklist_lookup.keys()), format_func=lambda checklist_id: f"#{checklist_id} | {checklist_lookup[checklist_id].get('date_of_race') or ''} | {checklist_lookup[checklist_id].get('horse_name') or ''} | {checklist_lookup[checklist_id].get('horse_owner_name') or ''} | {checklist_lookup[checklist_id].get('venue_name') or ''}", key='selected_review_checklist_id')
@@ -6718,6 +6597,7 @@ def render_checklist_review_page():
                     render_checklist_editor(entry=selected_entry, owner_id=owner_id, horses=horses, horse_owners=horse_owners, jockeys=jockeys, trainers=trainers, breeding_farms=breeding_farms, stallions=stallions, venues=venues, race_names=race_names, criteria=criteria)
     else:
         st.info('No checklists match the current filters.')
+
 
 
 
@@ -8143,6 +8023,165 @@ def _htc_checklist_loader(owner_id, target_keys):
                 target_keys,
             ),
         )
+
+# CHECKLIST_REVIEW_IMPLEMENTATION_20261125_V1
+
+def _crp_number(value):
+    import math
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip().replace(",", "").replace("¥", "").replace("￥", "")
+        if value.upper().startswith("JPY"):
+            value = value[3:].strip()
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _crp_review_table(data, **kwargs):
+    import pandas as pd
+    frame = data.copy()
+    config = dict(kwargs.pop("column_config", {}) or {})
+    for column in frame.columns:
+        if str(column).startswith("Prize"):
+            frame[column] = pd.Series([_crp_number(v) for v in frame[column]], index=frame.index, dtype="float64")
+            config[column] = st.column_config.NumberColumn(
+                str(column), format="yen",
+                help="Numeric JPY. Header sorting applies to this displayed page. Choose Show all to sort all filtered results.",
+            )
+    return st.dataframe(frame, column_config=config, **kwargs)
+
+
+def _crp_pack(records, today):
+    import math
+    from collections import defaultdict, deque
+    from datetime import datetime, timedelta
+    daily = defaultdict(list)
+    stats = {"records": len(records), "valid": 0, "missing": 0, "invalid": 0, "bad_date": 0, "future": 0}
+    for entry in records:
+        day = parse_race_date(entry.get("date_of_race"))
+        if isinstance(day, datetime):
+            day = day.date()
+        if day is None:
+            stats["bad_date"] += 1
+            continue
+        if day > today:
+            stats["future"] += 1
+            continue
+        raw = entry.get("prize")
+        if raw is None or isinstance(raw, str) and not raw.strip():
+            stats["missing"] += 1
+            continue
+        prize = _crp_number(raw)
+        if prize is None or prize < 0:
+            stats["invalid"] += 1
+            continue
+        daily[day].append(prize)
+        stats["valid"] += 1
+    points = []
+    window = deque()
+    for day in sorted(daily):
+        total = math.fsum(daily[day])
+        count = len(daily[day])
+        window.append((day, total, count))
+        first = day-timedelta(days=27)
+        while window and window[0][0] < first:
+            window.popleft()
+        window_total = math.fsum(row[1] for row in window)
+        window_count = sum(row[2] for row in window)
+        values = [total, total/count, window_total/window_count, window_total/len(window)]
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError("Prize values exceed the supported chart range.")
+        points.append({
+            "date": day.isoformat(), "total": total, "count": count, "mean": total/count,
+            "rolling_mean": window_total/window_count, "rolling_total": window_total/len(window),
+            "window_count": window_count, "window_days": len(window),
+        })
+    stats["total"] = math.fsum(point["total"] for point in points)
+    if not math.isfinite(stats["total"]):
+        raise ValueError("Prize values exceed the supported chart range.")
+    stats["latest"] = points[-1]["date"] if points else None
+    stats["age"] = (today-parse_race_date(stats["latest"])).days if points else None
+    stats["recent_count"] = sum(point["count"] for point in points if parse_race_date(point["date"]) >= today-timedelta(days=27))
+    return {"points": points, "stats": stats}
+
+
+# PRIZE_OVER_TIME_OPTIONAL_V1
+def _crp_render_trend(owner_id, first_records, second_records=None, second_enabled=False):
+    _crp_show_trend = st.checkbox('Show prize over time', value=False, key=f'review_prize_over_time_visible_{owner_id}')
+    if not _crp_show_trend:
+        return
+    import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import streamlit.components.v1 as components
+    if not first_records and (not (second_enabled and second_records)):
+        return
+    today = datetime.now(ZoneInfo('Asia/Tokyo')).date()
+    try:
+        first = _crp_pack(first_records, today)
+        first.update(name='First filter', color='#82b0ff')
+        series = [first]
+        if second_enabled:
+            second = _crp_pack(second_records if second_records is not None else [], today)
+            second.update(name='Second filter', color='#61d8bd')
+            series.append(second)
+    except (ValueError, OverflowError) as error:
+        st.error(str(error))
+        return
+    if not any((item['points'] for item in series)):
+        st.info('Prize trend: no dated, nonnegative prize values are available for the current conditions through today. Zero prizes are included; missing prizes are not treated as zero.')
+        return
+    payload = json.dumps({'series': series, 'today': today.isoformat()}, ensure_ascii=True, allow_nan=False)
+    payload = payload.replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    components.html(_CRP_HTML.replace('__CRP_DATA__', payload, 1), height=820, scrolling=True)
+
+
+
+_CRP_HTML = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
+<style>
+:root{color-scheme:dark;--bg:#0c1322;--panel:#121e32;--line:#2b3a52;--text:#edf3ff;--muted:#a1b2cb}*{box-sizing:border-box}[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums;-webkit-text-size-adjust:100%}body{padding:18px}
+header{display:flex;justify-content:space-between;align-items:start;gap:12px}.eyebrow{font-size:10px;letter-spacing:.14em;color:#9abaff;font-weight:650}.title{font-size:22px;font-weight:650;letter-spacing:-.025em;margin:3px 0}.muted{color:var(--muted);font-size:11px}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}.card{border:1px solid var(--line);border-radius:12px;padding:12px;background:linear-gradient(135deg,#172640,#111c2f);min-height:88px}.value{font-size:21px;font-weight:650;letter-spacing:-.025em;margin:6px 0;overflow-wrap:anywhere}.small{font-size:11px;color:var(--muted)}
+button{font:inherit;min-height:44px;padding:8px 12px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:9px;cursor:pointer;touch-action:manipulation}button:focus-visible{outline:2px solid #a9c4ff;outline-offset:2px}.controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.modes{display:flex;gap:4px}.mode[aria-pressed=true]{background:#284e82;border-color:#769ede}.mode{font-size:12px}.legend{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0 5px}.legend span{font-size:11px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.hint{font-size:11px;color:var(--muted);margin:5px 0 10px}.plot{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:4px}svg{display:block;width:100%;height:350px;touch-action:pan-y pinch-zoom}#details{margin-top:12px;border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel)}.detail-title{font-size:13px;font-weight:650;margin-bottom:8px}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.scope{padding:0 6px}.scope-name{font-weight:600;margin-bottom:5px}.detail-row{display:flex;justify-content:space-between;gap:12px;font-size:11px;margin:3px 0}.detail-row span:first-child{color:var(--muted)}.detail-row span:last-child{text-align:right;overflow-wrap:anywhere}.method{border-top:1px solid var(--line);margin-top:12px;padding-top:12px;font-size:11px;color:var(--muted)}.method p{margin:6px 0}.footer{font-size:10px;color:var(--muted);margin-top:10px}#about{font-size:11px}#quality{margin-top:8px}
+@media(max-width:520px){body{padding:12px}.title{font-size:19px}.cards{gap:6px}.card{padding:8px}.value{font-size:16px}.detail-grid{grid-template-columns:1fr;gap:10px}svg{height:320px}.modes button{padding:8px;font-size:11px}}
+</style></head><body>
+<header><div><div class="eyebrow">CONDITION MONITOR</div><div class="title">Prize over time</div><div class="muted">All matching records before pagination · race dates oldest to newest</div></div><button id="about" type="button" aria-expanded="false">About</button></header>
+<div class="cards"><div class="card"><div class="small" id="focusLabel"></div><div class="value" id="prize"></div><div class="small">Recorded prize · selected scope</div></div><div class="card"><div class="small">Valid-prize checklists</div><div class="value" id="count"></div><div class="small" id="recent"></div></div><div class="card"><div class="small">Latest valid match</div><div class="value" id="latest"></div><div class="small" id="age"></div></div></div>
+<div class="controls"><div class="modes" aria-label="Prize metric"><button type="button" class="mode" id="totalMode" aria-pressed="true">Daily total</button><button type="button" class="mode" id="meanMode" aria-pressed="false">Per checklist</button></div><span id="metricLabel" class="muted"></span></div>
+<div id="legend" class="legend"></div><div class="hint">Solid: observed race-day value · Dashed: trailing 28-day trend · Tap or hover for values; arrow keys browse dates.</div>
+<div class="plot"><svg id="chart" role="img" tabindex="0" aria-label="Matching checklist prizes by race date, oldest on the left and latest on the right"></svg></div>
+<div id="details" role="status" aria-live="polite"></div>
+<div id="method" class="method" hidden><p>Daily total adds valid saved prizes on each race date. Per checklist divides that total by the number of valid-prize checklists on that date, reducing the effect of changing record counts.</p><p>The dashed trend uses the 28 calendar days ending on each observed date, including that date. In Daily total view it is the average of recorded race-day totals in that window. In Per checklist view it is the record-weighted mean prize in that window. It uses past and current observations only.</p><p>Zero prizes are valid. Missing, invalid, negative, non-finite and future-dated values are excluded. Days without valid observations are not invented as zero. Dotted connectors span dates more than one day apart and are not observations.</p><p>All already-filtered finishing places are included, with no additional top-three restriction. Second-filter results are a subset, not an extra amount to add to the first filter. This is a historical descriptive view, not a forecast or betting ROI.</p><div id="quality"></div></div>
+<div class="footer">Latest-match age and recent counts use today's date in Japan. Review sample size and recency alongside prize levels.</div>
+<script>
+"use strict";
+const data=__CRP_DATA__,svg=document.getElementById('chart'),details=document.getElementById('details'),ns='http://www.w3.org/2000/svg',byId=id=>document.getElementById(id),DAY=86400000;
+const money=v=>'JPY '+new Intl.NumberFormat(undefined,{maximumFractionDigits:2}).format(v),num=v=>new Intl.NumberFormat().format(v),time=date=>Date.parse(date+'T00:00:00Z');
+const dates=Array.from(new Set(data.series.flatMap(s=>s.points.map(p=>p.date)))).sort();
+const times=dates.map(time);data.series.forEach(s=>s.lookup=new Map(s.points.map(p=>[p.date,p])));
+const focus=data.series[data.series.length-1],stats=focus.stats;
+byId('focusLabel').textContent=focus.name;byId('prize').textContent=money(stats.total);byId('count').textContent=num(stats.valid);byId('recent').textContent=num(stats.recent_count)+' in the last 28 days';byId('latest').textContent=stats.latest||'No valid match';byId('age').textContent=stats.age===null?'No dated prize data':num(stats.age)+' day(s) ago';
+data.series.forEach(s=>{const item=document.createElement('span'),dot=document.createElement('i');dot.className='dot';dot.style.background=s.color;item.append(dot,document.createTextNode(s.name));byId('legend').appendChild(item);const p=document.createElement('p');p.textContent=s.name+': '+num(s.stats.valid)+' valid / '+num(s.stats.records)+' matching; excluded '+num(s.stats.missing)+' missing prize, '+num(s.stats.invalid)+' invalid prize, '+num(s.stats.bad_date)+' invalid date, '+num(s.stats.future)+' future-dated.';byId('quality').appendChild(p)});
+let mode='total',active=dates.length-1,pinned=false,geometry=null,cross=null,dots=[],down=null,resizeTimer=null;
+function el(tag,attrs,text,parent=svg){const node=document.createElementNS(ns,tag);Object.entries(attrs).forEach(([k,v])=>node.setAttribute(k,String(v)));if(text!==undefined)node.textContent=text;parent.appendChild(node);return node}
+function text(parent,tag,value,cls){const node=document.createElement(tag);if(cls)node.className=cls;node.textContent=value;parent.appendChild(node);return node}
+function row(parent,key,value){const r=document.createElement('div');r.className='detail-row';text(r,'span',key);text(r,'span',value);parent.appendChild(r)}
+function valuesAt(date){return data.series.map(s=>({series:s,point:s.lookup.get(date)}))}
+function show(index){active=Math.max(0,Math.min(dates.length-1,index));if(!geometry)return;const date=dates[active],x=geometry.x(times[active]);cross.setAttribute('x1',x);cross.setAttribute('x2',x);dots.forEach(dot=>dot.remove());dots=[];valuesAt(date).forEach(({series,point})=>{if(point)dots.push(el('circle',{cx:x,cy:geometry.y(point[mode]),r:5,fill:series.color,stroke:'#edf3ff','stroke-width':2,'pointer-events':'none'}))});details.replaceChildren();text(details,'div',date+' · '+(mode==='total'?'Daily prize totals':'Mean prize per valid checklist'),'detail-title');const grid=document.createElement('div');grid.className='detail-grid';valuesAt(date).forEach(({series,point})=>{const panel=document.createElement('div');panel.className='scope';const title=text(panel,'div',series.name,'scope-name');title.style.color=series.color;if(!point){text(panel,'div','No valid observation on this date.','muted')}else{row(panel,'Daily total',money(point.total));row(panel,'Valid checklists',num(point.count));row(panel,'Mean / checklist',money(point.mean));row(panel,'28-day trend',money(point[mode==='total'?'rolling_total':'rolling_mean']));row(panel,'Trend sample',num(point.window_count)+' checklists / '+num(point.window_days)+' observed days')}grid.appendChild(panel)});details.appendChild(grid)}
+function draw(){svg.replaceChildren();dots=[];const width=Math.max(280,svg.clientWidth||720),height=svg.clientHeight||350,left=64,right=15,top=26,bottom=43,w=width-left-right,h=height-top-bottom;let min=times[0],max=times[times.length-1];if(min===max){min-=DAY;max+=DAY}let largest=1;data.series.forEach(s=>s.points.forEach(p=>{largest=Math.max(largest,p[mode],p[mode==='total'?'rolling_total':'rolling_mean'])}));largest*=1.12;const x=t=>left+(t-min)/(max-min)*w,y=v=>top+h-v/largest*h;geometry={x,y,left,right:width-right,width,min,max};svg.setAttribute('viewBox','0 0 '+width+' '+height);
+for(let i=0;i<=4;i++){const value=largest*i/4,yy=y(value);el('line',{x1:left,x2:width-right,y1:yy,y2:yy,stroke:'#2a3a52','stroke-width':1});el('text',{x:left-8,y:yy+4,'text-anchor':'end',fill:'#a5b5cd','font-size':10},new Intl.NumberFormat(undefined,{notation:'compact',maximumFractionDigits:1}).format(value))}el('text',{x:left,y:15,fill:'#a5b5cd','font-size':10},'JPY');
+let ticks=dates.length===1?[times[0]]:[0,1,2,3,4].map(i=>min+(max-min)*i/4),labels=new Set();ticks.forEach(t=>{const label=new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:'2-digit',timeZone:'UTC'}).format(new Date(t));if(labels.has(label))return;labels.add(label);el('text',{x:x(t),y:height-14,'text-anchor':t===min?'start':t===max?'end':'middle',fill:'#a5b5cd','font-size':10},label)});
+data.series.forEach(s=>{const trend=s.points.map((p,i)=>(i?'L':'M')+x(time(p.date))+','+y(p[mode==='total'?'rolling_total':'rolling_mean'])).join(' ');el('path',{d:trend,fill:'none',stroke:s.color,'stroke-width':2,'stroke-dasharray':'7 5',opacity:.55});for(let i=1;i<s.points.length;i++){const a=s.points[i-1],b=s.points[i];el('line',{x1:x(time(a.date)),y1:y(a[mode]),x2:x(time(b.date)),y2:y(b[mode]),stroke:s.color,'stroke-width':2.2,'stroke-dasharray':time(b.date)-time(a.date)>DAY?'2 5':'none',opacity:.95})}if(s.points.length===1){const p=s.points[0];el('circle',{cx:x(time(p.date)),cy:y(p[mode]),r:4,fill:s.color})}});
+cross=el('line',{x1:left,x2:left,y1:top,y2:top+h,stroke:'#d6e3ff','stroke-dasharray':'3 4','stroke-width':1,'pointer-events':'none'});el('rect',{x:left,y:top,width:w,height:h,fill:'transparent','pointer-events':'all'});byId('metricLabel').textContent=mode==='total'?'JPY per observed race day':'JPY per valid checklist';show(active)}
+function nearest(clientX){const rect=svg.getBoundingClientRect(),position=(clientX-rect.left)*geometry.width/rect.width,t=geometry.min+(Math.max(geometry.left,Math.min(geometry.right,position))-geometry.left)/(geometry.right-geometry.left)*(geometry.max-geometry.min);let lo=0,hi=times.length-1;while(lo<hi){const mid=Math.floor((lo+hi)/2);if(times[mid]<t)lo=mid+1;else hi=mid}return lo>0&&Math.abs(times[lo-1]-t)<Math.abs(times[lo]-t)?lo-1:lo}
+svg.addEventListener('pointermove',e=>{if(e.pointerType==='mouse'&&!pinned)show(nearest(e.clientX))});svg.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY}});svg.addEventListener('pointerup',e=>{if(down&&Math.abs(e.clientX-down.x)<12&&Math.abs(e.clientY-down.y)<12){pinned=true;show(nearest(e.clientX))}down=null});svg.addEventListener('pointercancel',()=>down=null);svg.addEventListener('pointerleave',()=>{if(!pinned)show(dates.length-1)});svg.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();pinned=true;show(active+(e.key==='ArrowLeft'?-1:1))}if(e.key==='Escape'){pinned=false;show(dates.length-1)}});
+function setMode(next){mode=next;byId('totalMode').setAttribute('aria-pressed',String(mode==='total'));byId('meanMode').setAttribute('aria-pressed',String(mode==='mean'));draw()}byId('totalMode').addEventListener('click',()=>setMode('total'));byId('meanMode').addEventListener('click',()=>setMode('mean'));byId('about').addEventListener('click',()=>{const panel=byId('method');panel.hidden=!panel.hidden;byId('about').setAttribute('aria-expanded',String(!panel.hidden))});window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(draw,100)});draw();
+</script></body></html>"""
 
 def main():
     _review_was_logged_in = bool(st.session_state.get('logged_in', False))
